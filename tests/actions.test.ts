@@ -1,0 +1,36 @@
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { parseAction } from '../src/actions'
+
+test('拒絕任意命令、未知操作與無效資料', () => {
+  for (const value of [null, [], {kind:'exec',command:'rm -rf'}, {kind:'push',workspaceId:9}, {kind:'push',workspaceId:'abc',cwd:'/tmp'}]) {
+    assert.throws(() => parseAction(value))
+  }
+})
+test('拒絕控制字元、空選取與非法 Agent', () => {
+  for (const value of [
+    {kind:'push',workspaceId:'a\0b'},
+    {kind:'stage',workspaceId:'a',paths:[],fingerprint:'abc'},
+    {kind:'ai-message',workspaceId:'a',agent:'sh'},
+    {kind:'create',workspaceId:'a',name:'../oops',base:'main',agent:'',prompt:''}
+  ]) assert.throws(() => parseAction(value))
+})
+test('合法提交訊息保留換行與 shell 符號，不當命令處理', () => {
+  assert.deepEqual(parseAction({kind:'commit',workspaceId:'a',message:'fix: $HOME\n\n`literal`'}), {kind:'commit',workspaceId:'a',message:'fix: $HOME\n\n`literal`'})
+})
+
+test('收尾只接受明確目標與布林清理選項，乾淨來源可不填提交訊息', () => {
+  const action = {kind:'finish',workspaceId:'source',targetWorkspaceId:'target',message:'',remove:true}
+  assert.deepEqual(parseAction(action), action)
+  for (const change of [{remove:'yes'}, {targetWorkspaceId:''}, {command:'git merge'}, {message:9}]) {
+    assert.throws(() => parseAction({...action,...change}))
+  }
+})
+
+test('建立接受慣用分支路徑，拒絕路徑穿越與非法分支元件', () => {
+  const action={kind:'create',workspaceId:'source',name:'feature/login',base:'main',agent:'',prompt:''}
+  assert.deepEqual(parseAction(action),action)
+  for (const name of ['feature/../main','feature//login','feature/.hidden','feature/a.lock','feature/a.','-bad']) {
+    assert.throws(()=>parseAction({...action,name}))
+  }
+})

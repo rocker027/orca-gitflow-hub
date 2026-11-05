@@ -1,0 +1,35 @@
+{
+  "manifestVersion": 2,
+  "id": "gitflow-hub",
+  "name": "Orca GitFlow Hub",
+  "version": "0.1.0",
+  "description": "工作樹管理、提交合回與本機快速收尾",
+  "engines": {
+    "orca": ">=1.4.249"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "gitflow-hub",
+        "title": "Orca GitFlow Hub",
+        "icon": "blocks",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "workspace:write"
+    }
+  ]
+}

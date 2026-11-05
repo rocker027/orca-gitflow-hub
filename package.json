@@ -1,0 +1,20 @@
+{
+  "name": "gitflow-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "test:panel": "orca plugin test .",
+    "check": "orca plugin check .",
+    "validate": "orca plugin validate .",
+    "package": "node scripts/package.mjs",
+    "verify": "npm run typecheck && npm run test:panel && npm run check && npm run package && orca plugin inspect .orca/package/gitflow-hub"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
