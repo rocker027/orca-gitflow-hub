@@ -24,7 +24,7 @@ export interface WorkspaceSummary {
 }
 
 export type Run = (
-  tool: 'git' | 'orca' | 'gh',
+  tool: 'git' | 'orca' | 'gh' | 'claude',
   args: readonly string[],
   options?: { cwd?: string; input?: string; signal?: AbortSignal; timeoutMs?: number }
 ) => Promise<string>

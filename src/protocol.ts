@@ -9,6 +9,7 @@ export type HubAction =
   | { kind: 'cleanup'; workspaceId: string; base: string }
   | { kind: 'ai-message'; workspaceId: string; agent: string }
   | { kind: 'finish'; workspaceId: string; targetWorkspaceId: string; message: string; remove: boolean }
+  | { kind: 'finish-summary'; workspaceId: string }
 
 export interface Preview {
   token: string
@@ -36,6 +37,8 @@ export interface Execution {
   workspaceId?: string
   status?: 'completed' | 'needs_attention'
   steps?: { id: 'commit' | 'merge' | 'open' | 'cleanup'; label: string; status: 'done' | 'skipped' | 'failed'; detail: string }[]
+  /** AI 寫好的完成說明，只填進表單，不會自動提交。 */
+  draft?: string
 }
 
 declare module 'orca' {

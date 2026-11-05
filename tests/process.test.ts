@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import { cancelAll, createRunner } from '../src/services/process'
 
-const executables = { git: process.execPath, orca: process.execPath, gh: process.execPath }
+const executables = { git: process.execPath, orca: process.execPath, gh: process.execPath, claude: process.execPath }
 
 test('命令參數以原字串傳入且不經 shell 展開', async () => {
   const run = createRunner(executables)
@@ -115,4 +115,11 @@ test('父程序退出且子孫關閉 stdio 時，取消仍等群組強制終止�
     await outcome
     await rm(folder, {recursive: true, force: true})
   }
+})
+
+// P1：只新增 claude 這一個工具，參數同樣以原字串傳入，不經 shell。
+test('claude 只以允許清單中的工具身分執行，其他工具仍拒絕', async () => {
+  const run = createRunner(executables)
+  assert.equal(await run('claude', ['-e', 'process.stdout.write(process.argv[1])', '$(whoami)']), '$(whoami)')
+  for (const tool of ['codex', 'sh', 'node', 'bash']) await assert.rejects(run(tool as 'claude', []), /工具/)
 })

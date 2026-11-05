@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import type { Run } from '../contracts'
 
-export type Executables = Record<'git' | 'orca' | 'gh', string>
+export type Executables = Record<'git' | 'orca' | 'gh' | 'claude', string>
 export interface RunnerOptions { maxBuffer?: number; timeoutMs?: number; env?: NodeJS.ProcessEnv }
 const MAX_BUFFER = 2 * 1024 * 1024
 const active = new Map<ChildProcess, () => void>()
@@ -32,7 +32,7 @@ function terminate(child: ChildProcess): Promise<void> {
 }
 
 function validate(tool: string, args: readonly string[], options: Parameters<Run>[2]): void {
-  if (!['git', 'orca', 'gh'].includes(tool)) throw new Error('不支援的工具。')
+  if (!['git', 'orca', 'gh', 'claude'].includes(tool)) throw new Error('不支援的工具。')
   if (!Array.isArray(args) || args.some(arg => typeof arg !== 'string' || arg.includes('\0')) ||
       args.reduce((length, arg) => length + Buffer.byteLength(arg), 0) > MAX_BUFFER ||
       options?.cwd?.includes('\0') || (options?.input && Buffer.byteLength(options.input) > MAX_BUFFER)) {
@@ -106,4 +106,4 @@ function execute(binary: string, tool: string, args: readonly string[], options:
 
 const orcaBinary = process.env.ORCA_CLI_COMMAND ||
   (process.platform === 'darwin' ? '/Applications/Orca.app/Contents/Resources/bin/orca' : 'orca-ide')
-export const run = createRunner({git: 'git', orca: orcaBinary, gh: 'gh'})
+export const run = createRunner({git: 'git', orca: orcaBinary, gh: 'gh', claude: 'claude'})

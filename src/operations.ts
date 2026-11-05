@@ -19,6 +19,8 @@ export interface Operation {
   baseSha?: string
   outcome?: Execution
   finish?: FinishContext
+  /** 使用者確認要傳給 AI 的變更內容；執行時只送這份。 */
+  summary?: string
 }
 export const previewLifetimeMs = 10 * 60 * 1000
 export const stateKey = (id: string) => createHash('sha256').update(id).digest('hex')

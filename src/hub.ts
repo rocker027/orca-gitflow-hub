@@ -12,11 +12,13 @@ import { OrcaService } from './services/orca'
 import { FinishGitService } from './services/finish'
 import { FinishWorkflow } from './finish-workflow'
 import { OverviewService } from './services/overview'
+import { SummaryService } from './services/summary'
 
-type Services = { git: GitService; github: GitHubService; orca: OrcaService; finish?: FinishGitService; overview?: OverviewService }
+type Services = { git: GitService; github: GitHubService; orca: OrcaService; finish?: FinishGitService; overview?: OverviewService; summary?: SummaryService }
 const titles: Record<HubAction['kind'], string> = {
   create: '建立工作區', stage: '暫存選取檔案', commit: '提交已暫存變更',
-  push: 'Push 分支', draft: '建立 Draft PR', cleanup: '清理工作區', 'ai-message': '委派 AI 提交訊息', finish:'本機收尾'
+  push: 'Push 分支', draft: '建立 Draft PR', cleanup: '清理工作區', 'ai-message': '委派 AI 提交訊息', finish:'本機收尾',
+  'finish-summary': '請 Claude 撰寫完成說明'
 }
 
 /** 面板操作的唯一入口；每次寫入重新解析工作區與版本。 */
@@ -103,6 +105,12 @@ export class Hub {
       case 'create':
         operation.baseSha = await this.baseSha(workspace, action.base)
         return `分支：${action.name}\n基準：${action.base} (${operation.baseSha})\nAgent：${action.agent || '不啟動'}\n提示詞：${action.prompt || '無'}\n建立獨立工作區，略過 repo setup hooks。若分支已存在，Orca 會加上數字後綴。`
+      case 'finish-summary': {
+        const material = await this.services.git.summaryMaterial(workspace.path)
+        operation.fingerprint = material.fingerprint
+        operation.summary = material.text
+        return `確認後，會把下方 ${material.files.length} 個檔案的未提交變更傳給 Claude（Anthropic 的 AI 服務），請它撰寫完成說明。\nClaude 不能使用任何工具，不會修改檔案，也不會開啟終端。寫好的說明只會填進表單，不會自動提交。\n已檢查部分常見的敏感檔名（含已刪除或改名的檔案）與金鑰格式，沒有發現。這只能擋下常見格式，無法保證沒有機密，送出前請確認下方內容沒有密碼或金鑰。${material.truncated ? '\n內容過長，只傳送前面的部分。' : ''}\n\n${material.text}`
+      }
       case 'cleanup': {
         await this.safeCleanup(workspace, action.base)
         operation.baseSha = await this.baseSha(workspace, action.base)
@@ -127,12 +135,15 @@ export class Hub {
     const check = await this.services.git.cleanupCheck(workspace.path, base)
     if (!check.safe) throw new Error(`目前不可清理：${check.reasons.join('、')}`)
   }
-  async execute(token: unknown): Promise<Execution> {
+  /** @param signal 面板逾時或關閉時取消；目前只用於呼叫 Claude 的唯讀操作。 */
+  async execute(token: unknown, signal?: AbortSignal): Promise<Execution> {
     if (typeof token !== 'string') throw new Error('預覽 token 無效。')
     return this.operations.execute(token, async operation => {
       const action = parseAction(operation.action)
       const workspace = await this.services.orca.resolve(action.workspaceId)
       if (workspace.path !== operation.workspace.path || workspace.repoId !== operation.workspace.repoId) throw new Error('工作區身分已變更，請重新預覽。')
+      // 撰寫說明只讀取且最多等 110 秒，不持有整個 repo 共用的 Hub 鎖，以免擋住其他工作樹的操作。
+      if (action.kind === 'finish-summary') return this.writeSummary({...operation,action,workspace}, signal)
       return this.operations.withLock(workspace, async () => {
         const snapshot = await this.services.git.snapshot(workspace.path)
         if (snapshot.fingerprint !== operation.fingerprint) throw new Error('工作區已變更，預覽已失效。')
@@ -177,7 +188,16 @@ export class Hub {
       }
       case 'draft': return this.createDraft(operation,snapshot)
       case 'ai-message': return this.launchMessage(workspace,action.agent,snapshot)
+      case 'finish-summary': throw new Error('撰寫說明不經由寫入流程執行。')
     }
+  }
+  /** 只送使用者預覽過的內容；工作區在預覽後變更就拒絕，避免說明和實際變更不符。 */
+  private async writeSummary(operation: Operation, signal?: AbortSignal): Promise<Execution> {
+    const snapshot = await this.services.git.snapshot(operation.workspace.path)
+    if (snapshot.fingerprint !== operation.fingerprint) throw new Error('工作區已變更，預覽已失效。')
+    if (!operation.summary) throw new Error('說明預覽資料不完整，請重新產生。')
+    const summary = this.services.summary ?? new SummaryService(this.run)
+    return {message: '已填入 Claude 寫的說明，請檢查並修改後再繼續。', draft: await summary.write(operation.summary, signal)}
   }
   private async createDraft(operation: Operation, snapshot: GitSnapshot): Promise<Execution> {
     if (operation.action.kind !== 'draft') throw new Error('操作類型無效。')

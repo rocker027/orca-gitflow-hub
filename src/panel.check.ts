@@ -52,6 +52,22 @@ export const requests = {
 
 export default defineCheck({
   worktrees: { requests },
+  mainOnly: { requests: { ...requests,
+    'hub.list': { workspaces: [workspaces[1]], warnings: [] },
+    'hub.dashboard': { ...dashboardFor(), workspaces: [workspaces[1]] }
+  } },
+  unknownChanges: { requests: { ...requests,
+    'hub.dashboard': { ...dashboardFor(), summaries: dashboardFor().summaries.map((summary) => ({
+      ...summary, changedFiles: 0, error: '無法讀取 Git 狀態，請重新整理。'
+    })) }
+  } },
+  longNames: { requests: { ...requests,
+    'hub.dashboard': { ...dashboardFor(), workspaces: workspaces.map((workspace) => workspace.isActive
+      ? { ...workspace, displayName: '修正登入與驗證流程並補上各種網路錯誤時的提示訊息',
+        branch: 'feature/login-and-authentication-error-message-improvements' } : workspace),
+    summaries: dashboardFor().summaries.map((summary) => summary.workspaceId === workspaces[0].id
+      ? { ...summary, branch: 'feature/login-and-authentication-error-message-improvements' } : summary) }
+  } },
   empty: { requests: {
     'hub.list': { workspaces: [], warnings: [] },
     'hub.dashboard': { workspaces: [], warnings: [], repoId: '', summaries: [] }

@@ -14,7 +14,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('hub.dashboard', input => hub.dashboard(input))
   orca.panels.handle('hub.inspect', input => hub.inspect(record(input).workspaceId))
   orca.panels.handle('hub.preview', input => hub.preview(input))
-  orca.panels.handle('hub.execute', input => hub.execute(record(input).token))
+  orca.panels.handle('hub.execute', (input, context) => hub.execute(record(input).token, context.signal))
   orca.panels.handle('hub.open', input => hub.open(record(input).workspaceId))
   orca.panels.handle('hub.prs', input => hub.prs(record(input).workspaceId))
   orca.panels.handle('hub.pr', input => hub.pr(record(input).workspaceId,record(input).number))

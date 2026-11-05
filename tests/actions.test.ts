@@ -34,3 +34,14 @@ test('建立接受慣用分支路徑，拒絕路徑穿越與非法分支元件',
     assert.throws(()=>parseAction({...action,name}))
   }
 })
+
+// A1：AI 說明只接受工作區 ID；不能指定 Agent、命令或其他參數。
+test('AI 完成說明只接受工作區，拒絕 Agent、命令與額外欄位', () => {
+  assert.deepEqual(parseAction({kind:'finish-summary',workspaceId:'a'}), {kind:'finish-summary',workspaceId:'a'})
+  for (const value of [
+    {kind:'finish-summary',workspaceId:'a',agent:'codex'},
+    {kind:'finish-summary',workspaceId:'a',command:'claude --dangerously-skip-permissions'},
+    {kind:'finish-summary',workspaceId:'a',targetWorkspaceId:'b'},
+    {kind:'finish-summary'}
+  ]) assert.throws(() => parseAction(value))
+})

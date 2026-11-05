@@ -7,6 +7,12 @@ import type { ChangedFile, CommitPreview, GitSnapshot, Run } from '../contracts'
 const MAX_FILES = 2_000
 const MAX_UNTRACKED_BYTES = 32 * 1024 * 1024
 const DIFF_ARGS = ['--no-ext-diff', '--no-textconv', '--no-color', '--binary']
+// 送給 AI 的 Diff 不含二進位 patch，只標示檔案有變更。
+const SUMMARY_DIFF_ARGS = ['--no-ext-diff', '--no-textconv', '--no-color']
+const MAX_SUMMARY_MATERIAL = 100_000
+const MAX_SUMMARY_NEW_FILE = 8_000
+
+export interface SummaryMaterial { fingerprint: string; files: string[]; text: string; truncated: boolean }
 
 function lines(value: string): string[] {
   return value.split('\n').filter(Boolean)
@@ -77,6 +83,19 @@ async function untrackedContent(cwd: string, files: ChangedFile[]): Promise<stri
   return digest.digest('hex')
 }
 
+async function newFileText(cwd: string, path: string): Promise<string> {
+  await verifyFilePath(cwd, path, false)
+  const handle = await open(join(cwd, path), constants.O_RDONLY | constants.O_NOFOLLOW)
+  try {
+    const buffer = Buffer.alloc(MAX_SUMMARY_NEW_FILE + 1)
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+    const bytes = buffer.subarray(0, bytesRead)
+    if (bytes.includes(0)) return `新檔案 ${path}（二進位，未傳送內容）`
+    const cut = bytesRead > MAX_SUMMARY_NEW_FILE ? '\n（已截斷）' : ''
+    return `新檔案 ${path}：\n${bytes.subarray(0, MAX_SUMMARY_NEW_FILE).toString('utf8')}${cut}`
+  } finally { await handle.close() }
+}
+
 function validateMessage(message: string): void {
   if (typeof message !== 'string' || !message.trim() || message.includes('\0') || message.length > 16_384) {
     throw new Error('提交訊息必須為非空文字，且不可超過 16 KiB')
@@ -95,6 +114,26 @@ function checkSecretContent(path: string, content: string): void {
   if (/-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----/.test(content)
     || /(?:AKIA|ASIA)[A-Z0-9]{16}/.test(content)
     || /glpat-[A-Za-z0-9_-]{20,}/.test(content)) throw new Error(`偵測到疑似機密或私鑰：${path}`)
+}
+
+// 送給外部 AI 前額外擋下的格式；只用在 AI 流程，提交流程維持原本的檢查。
+const SUMMARY_SECRET_PATTERNS = [/gh[pousr]_[A-Za-z0-9]{20,}/, /github_pat_[A-Za-z0-9_]{20,}/, /sk-ant-[A-Za-z0-9_-]{20,}/,
+  /[sr]k_live_[A-Za-z0-9]{16,}/, /xox[abprs]-[A-Za-z0-9-]{10,}/, /AIza[0-9A-Za-z_-]{35}/, /npm_[A-Za-z0-9]{36}/]
+
+function summarySensitivePath(path: string): boolean {
+  const basename = path.split('/').at(-1) ?? ''
+  return sensitivePath(path) || /^(\.netrc|_netrc|\.git-credentials|kubeconfig)$/i.test(basename) || /\.tfvars(\.json)?$/i.test(basename)
+}
+
+/** 刪除或改名的檔案已不在磁碟上，但原內容仍在 Diff 刪除行，所以依新舊路徑與整份內容檢查。 */
+function checkSummarySecrets(files: ChangedFile[], content: string): void {
+  for (const file of files) {
+    for (const path of [file.path, file.originalPath]) {
+      if (path && summarySensitivePath(path)) throw new Error(`敏感檔案的變更不可傳給 AI：${path}`)
+    }
+  }
+  checkSecretContent('變更內容', content)
+  if (SUMMARY_SECRET_PATTERNS.some((pattern) => pattern.test(content))) throw new Error('變更內容含疑似機密或金鑰，不可傳給 AI')
 }
 
 /** 本機 Git 狀態與明確寫入操作；工作區授權與操作 token 由 Hub 負責。 */
@@ -207,6 +246,22 @@ export class GitService {
       }
     }
     return snapshot
+  }
+
+  /** 收集要送給 AI 撰寫完成說明的未提交變更；含機密、無法安全讀取或讀取期間變更時拒絕。 */
+  async summaryMaterial(cwd: string): Promise<SummaryMaterial> {
+    const snapshot = await this.previewAllChanges(cwd, 'AI 完成說明')
+    if (!snapshot.files.length) throw new Error('沒有未提交的變更，不需要撰寫說明')
+    const files = [...new Set(snapshot.files.map((file) => file.path))]
+    const parts = [`分支：${snapshot.branch}`, `變更檔案：\n${files.join('\n')}`,
+      await this.git(cwd, ['diff', '--cached', ...SUMMARY_DIFF_ARGS]), await this.git(cwd, ['diff', ...SUMMARY_DIFF_ARGS])]
+    for (const file of snapshot.files.filter((entry) => entry.index === '?')) parts.push(await newFileText(cwd, file.path))
+    const full = parts.filter((part) => part.trim()).join('\n\n')
+    checkSummarySecrets(snapshot.files, full)
+    if ((await this.snapshot(cwd)).fingerprint !== snapshot.fingerprint) throw new Error('讀取期間變更已改變，請再試一次')
+    const truncated = full.length > MAX_SUMMARY_MATERIAL
+    const text = truncated ? `${full.slice(0, MAX_SUMMARY_MATERIAL - 40)}\n\n（內容過長，以下已截斷）` : full
+    return { fingerprint: snapshot.fingerprint, files, text, truncated }
   }
 
   async previewCommit(cwd: string, message: string): Promise<CommitPreview> {

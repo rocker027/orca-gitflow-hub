@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, writeFile, symlink, unlink } from 'node:fs/promises'
+import { access, mkdtemp, rm, writeFile, symlink, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Hub } from '../src/hub'
@@ -9,6 +9,7 @@ import type { GitSnapshot, Workspace } from '../src/contracts'
 import type { GitService } from '../src/services/git'
 import type { GitHubService } from '../src/services/github'
 import type { OrcaService } from '../src/services/orca'
+import type { SummaryService } from '../src/services/summary'
 
 async function fixture(t: {after(fn:()=>Promise<void>):void}) {
   const path=await mkdtemp(join(tmpdir(),'gitflow-hub-'));t.after(()=>rm(path,{recursive:true,force:true}))
@@ -61,4 +62,58 @@ test('AI 草稿只從本次檔案匯入，空檔、過期與symlink拒絕',async
   await assert.rejects(f.hub.aiResult(f.workspace.id),/大小/)
   await unlink(draft.path);await symlink('/etc/hosts',draft.path)
   await assert.rejects(f.hub.aiResult(f.workspace.id))
+})
+
+// H1：送出前必須預覽確認；執行只送預覽時的內容，變更後拒絕，重送 token 不會再呼叫 Claude。
+test('AI 完成說明：預覽不呼叫 Claude，執行只送預覽內容一次，變更後拒絕',async t=>{
+  const path=await mkdtemp(join(tmpdir(),'gitflow-hub-'));t.after(()=>rm(path,{recursive:true,force:true}))
+  const workspace:Workspace={id:'r::'+path,repoId:'r',path,branch:'feature/a',head:'a'.repeat(40),displayName:'a',hostId:'local',isMainWorktree:false}
+  let fingerprint='v1';let material='MATERIAL-V1'
+  const snapshot=()=>({head:workspace.head,branch:workspace.branch,fingerprint,files:[{path:'a.txt',index:' ',working:'M'}],stagedDiff:'',workingDiff:'changed'}) as GitSnapshot
+  const git={snapshot:async()=>snapshot(),summaryMaterial:async()=>({fingerprint,files:['a.txt'],text:material,truncated:false})} as unknown as GitService
+  const orca={resolve:async(id:string)=>{if(id!==workspace.id)throw new Error('拒絕工作區');return workspace}} as unknown as OrcaService
+  const sent:string[]=[]
+  const summary={write:async(text:string)=>{sent.push(text);return 'feat: AI 說明'}} as unknown as SummaryService
+  const values=new Map<string,unknown>()
+  const hub=new Hub(async()=>path,{get:async key=>values.get(key),set:async(key,value)=>{values.set(key,structuredClone(value))}},async()=>({opened:true}),
+    {git,github:{} as GitHubService,orca,summary})
+  const preview=await hub.preview({kind:'finish-summary',workspaceId:workspace.id})
+  assert.equal(sent.length,0)
+  assert.match(preview.detail,/Claude/)
+  assert.match(preview.detail,/Anthropic/)
+  assert.match(preview.detail,/MATERIAL-V1/)
+  material='MATERIAL-V2'
+  const outcome=await hub.execute(preview.token)
+  assert.deepEqual(sent,['MATERIAL-V1'])
+  assert.equal(outcome.draft,'feat: AI 說明')
+  await hub.execute(preview.token)
+  assert.equal(sent.length,1)
+  const stale=await hub.preview({kind:'finish-summary',workspaceId:workspace.id})
+  fingerprint='v2'
+  await assert.rejects(hub.execute(stale.token),/失效|變更/)
+  assert.equal(sent.length,1)
+  await assert.rejects(hub.preview({kind:'finish-summary',workspaceId:'other'}),/工作區/)
+})
+
+// H2：撰寫說明是唯讀操作，最多要等 110 秒；期間不可持有整個 repo 共用的 Hub 鎖，取消訊號要傳到 Claude。
+test('AI 完成說明：呼叫 Claude 時不持有 repo 鎖，並傳遞面板的取消訊號',async t=>{
+  const path=await mkdtemp(join(tmpdir(),'gitflow-hub-'));t.after(()=>rm(path,{recursive:true,force:true}))
+  const workspace:Workspace={id:'r::'+path,repoId:'r',path,branch:'feature/a',head:'a'.repeat(40),displayName:'a',hostId:'local',isMainWorktree:false}
+  const snapshot={head:workspace.head,branch:workspace.branch,fingerprint:'v1',files:[{path:'a.txt',index:' ',working:'M'}],stagedDiff:'',workingDiff:'changed'} as GitSnapshot
+  const git={snapshot:async()=>snapshot,summaryMaterial:async()=>({fingerprint:'v1',files:['a.txt'],text:'MATERIAL',truncated:false})} as unknown as GitService
+  const orca={resolve:async()=>workspace} as unknown as OrcaService
+  const observed:{locked?:boolean;signal?:AbortSignal}={}
+  const summary={write:async(_text:string,signal?:AbortSignal)=>{
+    observed.locked=await access(join(path,'gitflow-hub.lock')).then(()=>true,()=>false)
+    observed.signal=signal
+    return '說明'
+  }} as unknown as SummaryService
+  const values=new Map<string,unknown>()
+  const hub=new Hub(async()=>path,{get:async key=>values.get(key),set:async(key,value)=>{values.set(key,structuredClone(value))}},async()=>({opened:true}),
+    {git,github:{} as GitHubService,orca,summary})
+  const preview=await hub.preview({kind:'finish-summary',workspaceId:workspace.id})
+  const controller=new AbortController()
+  await hub.execute(preview.token,controller.signal)
+  assert.equal(observed.locked,false)
+  assert.equal(observed.signal,controller.signal)
 })

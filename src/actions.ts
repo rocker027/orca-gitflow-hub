@@ -60,6 +60,9 @@ export function parseAction(value: unknown): HubAction {
       if (typeof input.remove !== 'boolean') throw new Error('請明確選擇是否清理工作樹。')
       return { kind: 'finish', workspaceId: id, targetWorkspaceId: workspaceId(input.targetWorkspaceId),
         message: textField(input.message, '提交訊息', 8000, true), remove: input.remove }
+    case 'finish-summary':
+      fields(input, [])
+      return { kind: 'finish-summary', workspaceId: id }
     default: throw new Error('不支援這個操作。')
   }
 }

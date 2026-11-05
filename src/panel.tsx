@@ -4,10 +4,10 @@ import {
 } from 'orca'
 import type { Workspace } from './contracts'
 import {
-  branchName, canFinish, createAndOpen, edit, executePreview, finishTargets, importAiMessage, inspectWorkspace,
-  invalidatePreview, loadPr, loadPrs, openWorkspace, previewFinish, projectWorkspaces,
+  branchName, canFinish, cancelSummary, createAndOpen, edit, executePreview, finishTargets, importAiMessage, inspectWorkspace,
+  invalidatePreview, loadPr, loadPrs, openWorkspace, previewFinish, previewSummary, projectWorkspaces,
   refresh, requestPreview, returnToList, safeWebUrl, selectedWorkspace, selectProject, selectWorkspace,
-  setupState, state, toggleGithub
+  setupState, startWork, state, toggleGithub, writeSummary
 } from './panel-state'
 
 const AGENTS = [
@@ -23,31 +23,30 @@ function WorkspaceRow({ workspace }: { workspace: Workspace }) {
   const summary = read(state.dashboard)?.summaries.find((entry) => entry.workspaceId === workspace.id)
   const branch = summary?.branch.replace(/^refs\/heads\//, '') || branchName(workspace)
   const disabled = read(state.executing)
+  const title = workspace.displayName || branch
+  const primary = !canFinish(workspace)
   return <Card key={`workspace:${workspace.id}`}>
-    <Stack gap="xs">
+    <Stack gap="sm">
       <Row justify="between" wrap>
-        <Text weight="semibold">{branch}</Text>
-        <Row gap="xs" wrap>
-          {workspace.id === read(state.workspaceId) && <Badge tone="accent">已選取</Badge>}
-          {workspace.isActive && <Badge>目前</Badge>}
-          {workspace.isMainWorktree && <Badge>主要</Badge>}
-          {workspace.isDefaultBranch && <Badge>預設分支</Badge>}
-        </Row>
+        <Text weight="semibold">{title}</Text>
+        {workspace.isActive && <Badge tone="accent">目前開啟</Badge>}
       </Row>
+      {title !== branch && <Text muted size="sm">{`分支：${branch}`}</Text>}
+      <Text tone={summary?.error ? 'warning' : 'neutral'}>
+        {!summary ? (read(state.busy) ? '正在讀取變更…' : '暫時無法讀取變更')
+          : summary.error ? '暫時無法讀取變更'
+          : summary.changedFiles ? `${summary.changedFiles} 個檔案尚未提交` : '沒有未提交的變更'}
+      </Text>
+      {primary && <Text muted size="sm">主要分支，用來接收完成的工作。</Text>}
       <Row gap="sm" wrap>
-        <Text size="sm" tone={summary?.error ? 'warning' : 'neutral'}>
-          {!summary || summary.error ? '變更：UNKNOWN' : summary.changedFiles ? `${summary.changedFiles} 個變更` : '乾淨'}
-        </Text>
-        <Text muted size="sm">{`領先 ${summary?.ahead ?? '?'} · 落後 ${summary?.behind ?? '?'}`}</Text>
-      </Row>
-      <Text muted size="xs" truncate>{summary?.error || summary?.lastMessage || '尚無提交摘要'}</Text>
-      <Row gap="xs" wrap>
-        <Button key={`inspect:${workspace.id}`} size="sm" variant="ghost" disabled={disabled}
-          onPress={() => selectWorkspace(workspace.id)}>檢視</Button>
-        <Button key={`open:${workspace.id}`} size="sm" variant="ghost" disabled={disabled || read(state.busy)}
-          onPress={() => openWorkspace(workspace.id)}>在 Orca 開啟</Button>
-        <Button key={`finish:${workspace.id}`} size="sm" variant="outline" disabled={disabled || !canFinish(workspace)}
-          onPress={() => selectWorkspace(workspace.id, 'finish')}>收尾</Button>
+        <Button key={`open:${workspace.id}`} variant={workspace.isActive ? 'solid' : 'outline'}
+          disabled={disabled || read(state.busy)} onPress={() => openWorkspace(workspace.id)}>
+          {primary ? '開啟主要分支' : '繼續工作'}
+        </Button>
+        {!primary && <Button key={`finish:${workspace.id}`} variant="outline" disabled={disabled}
+          onPress={() => selectWorkspace(workspace.id, 'finish')}>完成並合併…</Button>}
+        <Button key={`inspect:${workspace.id}`} variant="ghost" disabled={disabled}
+          onPress={() => selectWorkspace(workspace.id)}>查看變更</Button>
       </Row>
     </Stack>
   </Card>
@@ -55,33 +54,58 @@ function WorkspaceRow({ workspace }: { workspace: Workspace }) {
 
 function WorkspaceList() {
   const query = read(state.search).trim().toLocaleLowerCase()
-  const rows = projectWorkspaces().filter((workspace) =>
+  const workspaces = projectWorkspaces()
+  const matches = workspaces.filter((workspace) =>
     `${branchName(workspace)} ${workspace.displayName}`.toLocaleLowerCase().includes(query))
-  return <Stack gap="sm">
-    {rows.map((workspace) => <WorkspaceRow key={workspace.id} workspace={workspace} />)}
-    {!read(state.busy) && rows.length === 0 && <EmptyState
-      title={query ? '沒有符合搜尋的工作樹' : '此專案沒有工作樹'} />}
+  const rows = [...matches.filter((workspace) => workspace.isActive), ...matches.filter((workspace) => !workspace.isActive)]
+  const groups = [
+    { title: '進行中的工作', rows: rows.filter(canFinish) },
+    { title: '主要分支', rows: rows.filter((workspace) => !canFinish(workspace)) }
+  ]
+  return <Stack gap="md">
+    {groups.filter((group) => group.rows.length).map((group) => <Stack key={group.title} gap="sm">
+      <Heading level={2}>{group.title}</Heading>
+      {group.rows.map((workspace) => <WorkspaceRow key={workspace.id} workspace={workspace} />)}
+    </Stack>)}
+    {!read(state.busy) && query && rows.length === 0 && <EmptyState title="找不到這個工作"
+      description="試試其他名稱，或清除搜尋查看全部工作。">
+      <Button variant="outline" onPress={() => edit(state.search, '')}>清除搜尋</Button>
+    </EmptyState>}
+    {!read(state.busy) && !query && workspaces.length > 0 && !workspaces.some(canFinish) &&
+      <Text muted>還沒有進行中的工作。點「開始新工作」建立第一個。</Text>}
   </Stack>
 }
 
 function CreateWorkspace() {
-  const workspace = selectedWorkspace() ?? projectWorkspaces()[0]
+  const workspace = selectedWorkspace()
   const disabled = read(state.busy) || !workspace
-  return <Collapsible title="新增工作樹" open={read(state.createOpen)} onChange={(open) => edit(state.createOpen, open)}>
-    <Stack gap="sm">
-      <Input label="新分支名稱" value={read(state.name)} disabled={disabled} maxLength={100}
-        placeholder="例如 feature/login" onChange={(value) => edit(state.name, value)} />
-      <Input label="基準分支（必填）" value={read(state.base)} disabled={disabled}
-        onChange={(value) => edit(state.base, value)} />
-      <Select label="建立後啟動 Agent" value={read(state.createAgent) || 'none'} disabled={disabled}
-        options={[{ value: 'none', label: '不啟動 Agent' }, ...AGENTS]}
-        onChange={(value) => edit(state.createAgent, value === 'none' ? '' : value)} />
-      {read(state.createAgent) && <Textarea label="開發任務" value={read(state.prompt)} disabled={disabled} rows={3}
-        onChange={(value) => edit(state.prompt, value)} />}
+  return <Card title="開始新工作">
+    <Stack gap="md">
+      <Text>為這次工作建立獨立資料夾，與其他工作分開。</Text>
+      <Stack gap="xs">
+        <Input label="工作名稱" value={read(state.name)} disabled={disabled} maxLength={100}
+          placeholder="例如：修正登入畫面" onChange={(value) => edit(state.name, value)} />
+        <Text muted size="sm">會用作分支名稱。可用中文、英文、數字或連字號，不要加空格。</Text>
+      </Stack>
+      <Text>{`從 ${read(state.base) || '尚未選擇的分支'} 開始`}</Text>
+      <Collapsible title="調整起點與 AI 助手" disabled={read(state.executing)}>
+        <Stack gap="sm">
+          <Input label="起點分支" value={read(state.base)} disabled={disabled}
+            placeholder="例如 main" onChange={(value) => edit(state.base, value)} />
+          <Select label="建立後啟動 AI 助手" value={read(state.createAgent) || 'none'} disabled={disabled}
+            options={[{ value: 'none', label: '不啟動，稍後自行選擇' }, ...AGENTS]}
+            onChange={(value) => edit(state.createAgent, value === 'none' ? '' : value)} />
+          {read(state.createAgent) && <Textarea label="請 AI 做什麼" value={read(state.prompt)} disabled={disabled} rows={3}
+            placeholder="描述希望完成的工作" onChange={(value) => edit(state.prompt, value)} />}
+        </Stack>
+      </Collapsible>
+      {read(state.createAgent) && <Text size="sm">{`建立後會啟動 ${AGENTS.find((agent) => agent.value === read(state.createAgent))?.label}。`}</Text>}
+      {!read(state.name).trim() && <Text muted size="sm">先填工作名稱，就可以建立。</Text>}
+      {!read(state.base).trim() && <Text tone="warning" size="sm">請展開「調整起點與 AI 助手」，填寫起點分支。</Text>}
       <Button disabled={disabled || !read(state.name).trim() || !read(state.base).trim()}
-        onPress={createAndOpen}>建立並開啟</Button>
+        onPress={createAndOpen}>建立並開啟工作</Button>
     </Stack>
-  </Collapsible>
+  </Card>
 }
 
 function FinishWorkspace() {
@@ -92,26 +116,70 @@ function FinishWorkspace() {
   const hasChanges = Boolean(snapshot?.files.length)
   const disabled = read(state.busy) || !snapshot || !canFinish(workspace) || !targets.length
     || (hasChanges && !read(state.finishMessage).trim())
-  return <Card title={`收尾：${branchName(workspace)}`}>
-    <Stack gap="sm">
-      <Text>提交全部變更 → 合回目標分支 → 開啟目標 → 清理工作樹</Text>
-      {targets.length > 0 && <Select label="合回目標工作樹" value={read(state.finishTargetId)} disabled={read(state.busy)}
-        options={targets.map((target) => ({ value: target.id, label: branchName(target) }))}
+  return <Card title={`完成工作：${branchName(workspace)}`}>
+    <Stack gap="md">
+      <Text>把這次工作的變更合併到另一個分支。下一步會先讓你確認內容。</Text>
+      <Text muted size="sm">只更新這台電腦，不會上傳到 GitHub。</Text>
+      {targets.length > 0 && <Select label="1. 合併到哪裡" value={read(state.finishTargetId)} disabled={read(state.busy)}
+        options={targets.map((target) => ({ value: target.id,
+          label: `${branchName(target)}${!canFinish(target) ? '（主要分支）' : ''}` }))}
         onChange={(value) => edit(state.finishTargetId, value)} />}
-      {!targets.length && <Callout tone="warning">需要另一個同專案工作樹作為合併目標。</Callout>}
-      {!snapshot && <Text muted>尚未取得來源狀態，無法預覽收尾。</Text>}
-      {snapshot && <Stack gap="xs">
-        <Text weight="medium">{hasChanges ? `將提交全部 ${snapshot.files.length} 個變更檔案` : '沒有未提交的變更，會略過提交。'}</Text>
-        {snapshot.files.map((file) => <Text key={file.path} size="sm">{`${file.index}${file.working} ${file.path}`}</Text>)}
-        {hasChanges && <Textarea label="收尾提交訊息" value={read(state.finishMessage)} disabled={read(state.busy)} rows={3}
-          onChange={(value) => edit(state.finishMessage, value)} />}
+      {!targets.length && <Callout tone="warning" title="還沒有合併位置">
+        請先在 Orca 開啟同專案的另一個工作資料夾，再回來重新整理。
+      </Callout>}
+      {!snapshot && !read(state.busy) && <Callout tone="warning">
+        尚未取得變更。請按「重新整理」再試一次。
+      </Callout>}
+      {snapshot && <Stack gap="sm">
+        {hasChanges ? <Stack gap="xs">
+          <Textarea label="2. 這次完成了什麼" value={read(state.finishMessage)} disabled={read(state.busy)} rows={3}
+            placeholder="例如：修正登入時沒有顯示錯誤訊息" onChange={(value) => edit(state.finishMessage, value)} />
+          <Text muted size="sm">這段說明會保存在 Git 提交紀錄中。</Text>
+          <SummaryHelper />
+        </Stack> : <Text>沒有未提交的變更，將合併既有提交。</Text>}
+        <FinishFiles />
       </Stack>}
-      <Checkbox label="完成後清理來源工作樹" description="只在確認已合併且可以安全清理時移除，保留本機分支。"
+      <Checkbox label="合併後移除這個工作資料夾" description="預設勾選。只在安全檢查通過後移除資料夾，本機分支仍保留。取消勾選可保留資料夾。"
         checked={read(state.removeAfterFinish)} disabled={read(state.busy)}
         onChange={(checked) => edit(state.removeAfterFinish, checked)} />
-      <Button disabled={disabled} onPress={previewFinish}>預覽收尾</Button>
+      <Text muted size="sm">合併前，請先關閉來源與目標工作中仍開著的終端和 AI 助手。</Text>
+      {hasChanges && !read(state.finishMessage).trim() && <Text muted size="sm">填寫完成說明後，就可以查看合併內容。</Text>}
+      <Button disabled={disabled} onPress={previewFinish}>下一步：確認合併內容</Button>
     </Stack>
   </Card>
+}
+
+/** 請 Claude 撰寫完成說明：先說明會傳送什麼並取得確認，寫好只填入欄位。 */
+function SummaryHelper() {
+  const preview = read(state.summaryPreview)
+  if (read(state.summaryWriting) && read(state.busy)) {
+    return <Text size="sm">Claude 正在撰寫說明，大約需要 10–60 秒，請稍候。</Text>
+  }
+  if (preview) {
+    return <Callout tone="accent" title="要把變更傳給 Claude 嗎？">
+      <Stack gap="sm">
+        <Text size="sm">會把這次未提交的變更內容傳給 Claude（Anthropic 的 AI 服務）來寫說明。Claude 不能使用工具，也不會修改檔案。寫好後會取代上面的說明，你可以再修改。</Text>
+        <Text size="sm">外掛只能擋下常見的密碼與金鑰格式。送出前請展開「查看會傳送的內容」，確認沒有機密。</Text>
+        <Collapsible title="查看會傳送的內容"><Code block>{preview.detail}</Code></Collapsible>
+        <Row gap="sm" wrap>
+          <Button onPress={writeSummary}>確認傳送給 Claude</Button>
+          <Button variant="ghost" onPress={cancelSummary}>取消</Button>
+        </Row>
+      </Stack>
+    </Callout>
+  }
+  return <Button variant="outline" disabled={read(state.busy) || read(state.executing)} onPress={previewSummary}>請 AI 幫我寫</Button>
+}
+
+function FinishFiles() {
+  const files = read(state.snapshot)?.files ?? []
+  if (!files.length) return null
+  return <Collapsible title={`會提交全部 ${files.length} 個變更檔案`}>
+    <Stack gap="xs">
+      <Text size="sm">包含已暫存、未暫存及新增檔案。若要分批提交，請返回「查看變更」。</Text>
+      {files.map((file) => <Text key={file.path} size="sm">{file.path}</Text>)}
+    </Stack>
+  </Collapsible>
 }
 
 function GitFiles() {
@@ -252,14 +320,32 @@ function GitHub() {
 function WorkspaceDetails() {
   const workspace = selectedWorkspace()
   if (!read(state.detailsOpen) || !workspace) return null
-  return <Card title={`檢視：${branchName(workspace)}`}>
+  const summary = read(state.dashboard)?.summaries.find((entry) => entry.workspaceId === workspace.id)
+  const target = projectWorkspaces().find((entry) => entry.id === read(state.dashboard)?.defaultTargetId)
+  const snapshot = read(state.snapshot)
+  return <Card title={`查看變更：${branchName(workspace)}`}>
     <Stack gap="sm">
-      <Collapsible title="工作樹識別">
-        <Text size="xs">{workspace.path}</Text><Code>{workspace.id}</Code>
-      </Collapsible>
+      <Text>{snapshot ? (snapshot.files.length ? `${snapshot.files.length} 個檔案尚未提交` : '沒有未提交的變更')
+        : read(state.busy) ? '正在確認變更狀態…' : '無法讀取變更，請重新整理。'}</Text>
+      {snapshot && snapshot.files.length > 0 && <Collapsible title="變更檔案" defaultOpen>
+        <Stack gap="xs">{snapshot.files.map((file) => <Text key={file.path} size="sm">{file.path}</Text>)}</Stack>
+      </Collapsible>}
+      <Row gap="sm" wrap>
+        <Button disabled={read(state.busy)} onPress={() => openWorkspace(workspace.id)}>繼續工作</Button>
+        {canFinish(workspace) && <Button variant="outline" disabled={read(state.busy)}
+          onPress={() => selectWorkspace(workspace.id, 'finish')}>完成並合併…</Button>}
+      </Row>
       <Collapsible title="Git 差異與逐檔提交"><Git /></Collapsible>
       <Collapsible title="GitHub PR" open={read(state.githubOpen)} onChange={toggleGithub}><GitHub /></Collapsible>
-      <Collapsible title="只清理工作樹">
+      <Collapsible title="分支與技術資訊">
+        <Stack gap="xs">
+          <Text size="sm">{workspace.path}</Text><Code>{workspace.id}</Code>
+          {target && <Text size="sm">{`與 ${branchName(target)} 比較：本分支多 ${summary?.ahead ?? '未知'} 個提交，少 ${summary?.behind ?? '未知'} 個提交。`}</Text>}
+          {summary?.error && <Callout tone="warning">{summary.error}</Callout>}
+          <Text size="sm">{`最後提交：${summary?.lastMessage || '尚未取得'}`}</Text>
+        </Stack>
+      </Collapsible>
+      <Collapsible title="進階：只移除工作資料夾">
         <Stack gap="sm">
           <Input label="確認已合併至分支" value={read(state.base)} disabled={read(state.busy)}
             onChange={(value) => edit(state.base, value)} />
@@ -277,15 +363,25 @@ function PreviewCard() {
   if (!preview) return null
   const source = selectedWorkspace()
   const target = finishTargets().find((workspace) => workspace.id === read(state.finishTargetId))
-  return <Card title={preview.title}>
+  return <Card title={read(state.finishOpen) ? '確認合併內容' : preview.title}>
     <Stack gap="sm">
       {read(state.finishOpen) && source && target && <Text weight="semibold">{`${branchName(source)} → ${branchName(target)}`}</Text>}
-      <Callout tone="warning" title="確認完整操作">{preview.summary}</Callout>
+      <Callout tone="warning" title="確認後會執行以下操作">{preview.summary}</Callout>
       {preview.steps?.map((step, index) => <Text key={index}>{`${index + 1}. ${step}`}</Text>)}
       <Collapsible title="預覽細節" defaultOpen={!read(state.finishOpen)}><Code block>{preview.detail}</Code></Collapsible>
-      <Row gap="sm">
-        <Button disabled={read(state.busy)} onPress={executePreview}>確認執行</Button>
-        <Button disabled={read(state.busy)} variant="ghost" onPress={invalidatePreview}>取消預覽</Button>
+      {read(state.finishOpen) && <Stack gap="sm">
+        <Text>{read(state.finishMessage) ? `完成說明：${read(state.finishMessage)}` : '沿用既有提交，不新增提交。'}</Text>
+        <FinishFiles />
+        <Text weight="medium">{read(state.removeAfterFinish)
+          ? '合併後會移除來源工作資料夾，保留本機分支。'
+          : '合併後保留來源工作資料夾與本機分支。'}</Text>
+        <Text muted size="sm">只更新這台電腦，不會上傳到 GitHub。</Text>
+      </Stack>}
+      <Row gap="sm" wrap>
+        <Button disabled={read(state.busy)} onPress={executePreview}>
+          {read(state.finishOpen) ? '確認合併' : '確認執行'}
+        </Button>
+        <Button disabled={read(state.busy)} variant="ghost" onPress={invalidatePreview}>返回修改</Button>
       </Row>
     </Stack>
   </Card>
@@ -301,12 +397,16 @@ function ExecutionResult() {
       <Callout tone={partial ? 'warning' : 'success'}>{execution.message}</Callout>
       {execution.steps?.map((step) => <Stack key={step.id} gap="xs">
         <Row gap="xs"><Badge tone={step.status === 'failed' ? 'warning' : 'neutral'}>
-          {step.status === 'done' ? '完成' : step.status === 'skipped' ? '略過' : '未完成'}
+          {step.status === 'done' ? '完成' : step.status === 'skipped' ? (step.detail === '尚未執行' ? '尚未執行' : '略過') : '未完成'}
         </Badge><Text weight="medium">{step.label}</Text></Row>
         <Text size="sm">{step.detail}</Text>
       </Stack>)}
-      {partial && <Text size="sm">請核對各步結果，再依目前狀態處理未完成項目。</Text>}
+      {partial && <Text size="sm">已完成的步驟不會復原。請先開啟工作查看結果，再處理未完成項目。</Text>}
+      {execution.workspaceId && projectWorkspaces().some((workspace) => workspace.id === execution.workspaceId) &&
+        <Button variant="outline" disabled={read(state.busy)}
+          onPress={() => openWorkspace(execution.workspaceId)}>開啟工作查看結果</Button>}
       {url && <Link href={url}>開啟操作結果</Link>}
+      <Button variant="ghost" disabled={read(state.busy)} onPress={() => edit(state.execution, null)}>隱藏結果</Button>
     </Stack>
   </Card>
 }
@@ -315,30 +415,45 @@ export function setup(ctx: PanelContext): void { setupState(ctx) }
 
 export default function Panel() {
   const list = read(state.list)
-  const focused = read(state.finishOpen) || read(state.detailsOpen)
+  const focused = read(state.finishOpen) || read(state.detailsOpen) || read(state.createOpen)
+  const preview = read(state.preview)
   const repositories = [...new Map(list.workspaces.map((workspace) => [workspace.repoId,
     { value: workspace.repoId, label: workspace.repoName || workspace.repoId }])).values()]
   return <Stack gap="md">
-    <Row justify="between">
-      {focused ? <Button variant="ghost" disabled={read(state.executing)} onPress={returnToList}>返回清單</Button>
-        : <Heading>工作樹</Heading>}
-      <Button icon="refresh" variant="ghost" size="sm" disabled={read(state.busy)}
+    <Row justify="between" wrap>
+      {focused ? <Button variant="ghost" disabled={read(state.executing)} onPress={returnToList}>返回工作清單</Button>
+        : <Heading>工作管理</Heading>}
+      <Button icon="refresh" variant="ghost" disabled={read(state.busy)}
         onPress={() => { if (!read(state.busy) && !read(state.executing)) return refresh() }}>重新整理</Button>
     </Row>
     {repositories.length > 0 && <Select label="專案" value={read(state.repoId)} options={repositories}
       disabled={read(state.executing)} onChange={selectProject} />}
-    {!focused && <Input label="搜尋工作樹" type="search" value={read(state.search)} placeholder="分支或工作樹名稱"
-      disabled={read(state.executing)} onChange={(value) => edit(state.search, value)} />}
-    {read(state.busy) && <Spinner label={read(state.executing) ? '正在執行確認的操作' : '正在讀取工作樹'} />}
-    {read(state.error) && <Callout tone="danger" title="操作未完成">{read(state.error)}</Callout>}
+    {read(state.busy) && <Spinner label={read(state.executing) ? '正在執行，請稍候…' : '正在讀取，請稍候…'} />}
+    {read(state.error) && <Callout tone="danger" title="這一步沒有完成">
+      <Stack gap="xs">
+        <Text>{read(state.error)}</Text>
+        <Text size="sm">若操作結果不明，請先重新整理並查看工作。確認目前狀態後，再決定是否重試。</Text>
+      </Stack>
+    </Callout>}
     {read(state.notice) && <Text>{read(state.notice)}</Text>}
     {list.warnings.map((warning, index) => <Callout key={index} tone="warning">{warning}</Callout>)}
     <ExecutionResult />
-    <PreviewCard />
-    <FinishWorkspace />
-    <WorkspaceDetails />
-    {!focused && <CreateWorkspace />}
-    {!focused && <WorkspaceList />}
-    {!read(state.busy) && list.workspaces.length === 0 && <Text muted>請先在 Orca 加入 Git 專案，再重新整理。</Text>}
+    {preview ? <PreviewCard /> : <Stack gap="md">
+      {read(state.createOpen) && <CreateWorkspace />}
+      <FinishWorkspace />
+      <WorkspaceDetails />
+    </Stack>}
+    {!focused && <Stack gap="md">
+      {projectWorkspaces().length > 0 && <Stack gap="sm">
+        <Text muted>開始新工作，或從下方選擇要繼續的工作。</Text>
+        <Button disabled={read(state.busy) || !selectedWorkspace()} onPress={startWork}>開始新工作</Button>
+        {!read(state.busy) && !selectedWorkspace() && <Text tone="warning" size="sm">請先重新整理專案狀態，再建立工作。</Text>}
+        <Input label="搜尋工作" type="search" value={read(state.search)} placeholder="輸入工作名稱或分支名稱"
+          disabled={read(state.executing)} onChange={(value) => edit(state.search, value)} />
+        <WorkspaceList />
+      </Stack>}
+      {!read(state.busy) && !read(state.error) && !projectWorkspaces().length && <EmptyState
+        title="先加入一個專案" description="請在 Orca 開啟已有 Git 提交的本機專案，再按「重新整理」。" />}
+    </Stack>}
   </Stack>
 }
