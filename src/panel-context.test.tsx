@@ -4,7 +4,7 @@ import type { GitSnapshot, Workspace } from './contracts'
 import type { Dashboard, Execution, HubAction, HubList, Preview } from './protocol'
 import * as panel from './panel'
 import { requests, snapshot, workspaces } from './panel.check.ts'
-import { state } from './panel-state'
+import { previewAdvice, state, writeAdvice } from './panel-state'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -87,8 +87,8 @@ test('同專案切換工作樹會更新目前標記與下一次建立的來源',
   const view = await mount(panel, { host: f.host })
   f.activate(workspaces[1].id)
   await f.emit(view)
-  assert.ok(view.find({ type: 'Card', label: '目前在主要分支：main' }))
-  assert.equal(view.find({ type: 'Card', label: '目前的工作' }), null)
+  assert.ok(view.find({ text: '目前在主要分支' }))
+  assert.equal(view.find({ text: '目前工作' }), null)
   assert.ok(view.find({ testId: `finish:${workspaces[0].id}` }))
   await view.press({ text: '開始新工作' })
   await view.type({ label: '工作名稱' }, '新工作')
@@ -309,7 +309,7 @@ test('完成後才收到自動開啟目標的切換事件，仍保留逐步結�
   assert.ok(view.find({ text: '來源有新變更' }))
   f.activate(workspaces[1].id)
   await f.emit(view)
-  assert.ok(view.find({ type: 'Card', label: '目前在主要分支：main' }))
+  assert.ok(view.find({ text: '目前在主要分支' }))
   assert.ok(view.find({ label: '還沒全部完成' }))
   assert.ok(view.find({ text: '來源有新變更' }))
   assert.equal(f.calls('hub.execute').length, 1)
@@ -361,9 +361,8 @@ test('Claude 評估期間切換工作樹，晚到的建議不會填進新的工�
   const started = deferred<void>()
   f.overrides.execute = () => { started.resolve(); return execution.promise }
   await view.press({ testId: `finish:${workspaces[0].id}` })
-  await view.toggle({ label: '其他選項' })
-  await view.press({ text: '（可選）請 AI 評估合併風險' })
-  const writing = view.press({ text: '確認傳送給 Claude' })
+  await previewAdvice()
+  const writing = writeAdvice()
   await started.promise
   f.activate(workspaces[2].id)
   const event = f.emit(view)

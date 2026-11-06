@@ -32,7 +32,7 @@ export class FinishWorkflow {
     this.validate(source, target)
     await this.participants(source, target)
     if (action.remove && await this.git.hasIgnoredFiles(source.path)) {
-      throw new Error('有 Git 忽略的本機檔案（例如 .env 或 node_modules）。請展開「其他選項」，取消「完成後移除這個工作資料夾」後再試。')
+      throw new Error('工作資料夾內有未由 Git 保存的忽略檔案，無法安全移除。請取消勾選「完成後移除資料夾」，再按「下一步：確認」。這些本機檔案會留在原資料夾。')
     }
     return {target, plan:await this.finish.prepare(source.path, target.path, action.message, {strategy:action.strategy, squash:action.squash})}
   }

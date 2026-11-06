@@ -17,8 +17,8 @@ for (const clean of [false, true]) {
         } })
         const view = await mount(panel, { host })
         await view.press({ testId: `finish:${workspaces[0].id}` })
-        await view.select({ label: '2. 怎麼合併' }, strategy)
-        await view.select({ label: '3. 要不要把提交合成一個' }, squash ? 'squash' : 'keep')
+        await view.select({ label: '合併方式' }, strategy)
+        if (squash) await view.toggle({ label: '合成 1 個提交（Squash）' })
         assert.equal(view.find({ label: '4. 這次完成了什麼' }), null)
         assert.equal(view.find({ text: '請 AI 幫我寫' }), null)
         assert.equal(view.find({ text: '下一步：確認' })?.disabled, false)
@@ -26,6 +26,8 @@ for (const clean of [false, true]) {
         const message = !clean || squash ? '完成 feature/login' : ''
         assert.deepEqual(previews, [{ kind: 'finish', workspaceId: workspaces[0].id,
           targetWorkspaceId: workspaces[1].id, message, strategy, squash, remove: true }])
+        assert.equal(view.find({ text: '提交訊息：完成 feature/login（自動產生）' }), null)
+        await view.toggle({ label: '執行步驟與提交訊息' })
         assert.equal(Boolean(view.find({ text: '提交訊息：完成 feature/login（自動產生）' })), Boolean(message))
         assert.equal(host.calls.filter((call) => call.method === 'plugin.request'
           && (call.params as { name?: string }).name === 'hub.execute').length, 0)
@@ -35,18 +37,16 @@ for (const clean of [false, true]) {
   }
 }
 
-test('其他選項預設收起，仍說明清理後果；展開後可以保留工作資料夾', async () => {
+test('清理選項可切換並說明後果，收尾頁不提供 AI 風險建議入口', async () => {
   const host = mockHost({ requests })
   const view = await mount(panel, { host })
   await view.press({ text: '完成這個工作' })
-  assert.equal(view.find({ label: '完成後移除這個工作資料夾' }), null)
+  assert.equal(view.valueOf({ label: '完成後移除資料夾' }), true)
+  assert.equal(view.find({ label: 'AI 風險建議' }), null)
   assert.equal(view.find({ text: '（可選）請 AI 評估合併風險' }), null)
-  assert.ok(view.find({ text: '完成後移除工作資料夾，分支保留。可在「其他選項」改成保留資料夾。' }))
-  await view.toggle({ label: '其他選項' })
-  assert.equal(view.valueOf({ label: '完成後移除這個工作資料夾' }), true)
-  assert.ok(view.find({ text: '（可選）請 AI 評估合併風險' }))
+  assert.equal(view.find({ label: '完成後移除資料夾' })?.props.description, '分支會保留。')
   assert.equal(view.find({ text: '請 AI 幫我寫' }), null)
-  await view.toggle({ label: '完成後移除這個工作資料夾' })
-  assert.ok(view.find({ text: '完成後保留工作資料夾與分支。' }))
+  await view.toggle({ label: '完成後移除資料夾' })
+  assert.equal(view.find({ label: '完成後移除資料夾' })?.props.description, '資料夾與分支都會保留。')
   await view.unmount()
 })
