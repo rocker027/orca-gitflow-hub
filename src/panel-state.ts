@@ -30,7 +30,7 @@ export const state = {
   /** 預設一般合併、保留每個提交；改寫歷史只在使用者明確選擇時發生。 */
   finishStrategy: atom<FinishStrategy>('merge'),
   finishSquash: atom(false),
-  removeAfterFinish: atom(true),
+  removeAfterFinish: atom(false),
   targetBranch: atom(''),
   prTitle: atom(''),
   prDescription: atom(''),
@@ -141,7 +141,7 @@ function clearWorkspaceData(): void {
   set(state.finishStrategy, 'merge')
   set(state.finishSquash, false)
   set(state.advice, null)
-  set(state.removeAfterFinish, true)
+  set(state.removeAfterFinish, false)
   set(state.prs, null)
   set(state.pr, null)
   set(state.githubOpen, false)

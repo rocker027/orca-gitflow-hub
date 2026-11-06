@@ -1,6 +1,10 @@
-import { defineCheck } from 'orca/testing'
+import { defineCheck, type TestPanel } from 'orca/testing'
 import type { GitSnapshot, PrDetails, Workspace } from './contracts'
 import type { Dashboard } from './protocol'
+
+export async function expandFinishOptions(view: TestPanel) {
+  if (!view.find({ label: '合成 1 個提交（Squash）' })) await view.toggle({ label: '其他選項' })
+}
 
 export const workspaces: Workspace[] = [
   { id: 'repo::/fixture/feature', repoId: 'repo', repoName: 'App', path: '/fixture/feature', branch: 'feature/login',

@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,"><title>Worktree 收尾：Merge 或 Rebase</title>
+<style>
+*{box-sizing:border-box}body{margin:0;padding:20px;font:14px/1.6 var(--font-sans,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif);background:var(--background,#f5f6f8);color:var(--foreground,#252831)}
+button,input,select{font:inherit}button,select,summary{cursor:pointer}button{padding:9px 15px;min-height:40px;border:1px solid var(--border,#cdd2db);border-radius:7px;background:var(--card,#fff);color:var(--card-foreground,#252831);font-weight:550}button:hover{background:var(--accent,#e9edf4);color:var(--accent-foreground,#252831)}button.primary{background:var(--primary,#2858c7);color:var(--primary-foreground,#fff);border-color:transparent}button:disabled{opacity:.5;cursor:not-allowed}button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid var(--ring,#4275de);outline-offset:3px}
+select{padding:8px 12px;min-height:40px;width:100%;border:1px solid var(--input,#bfc6d1);border-radius:7px;background:var(--card,#fff);color:var(--card-foreground,#252831)}input[type=radio],input[type=checkbox]{width:17px;height:17px;accent-color:var(--primary,#2858c7);flex:none;margin:4px 0}h1,h2,h3,p{margin:0}h1,h2{font-size:22px;line-height:1.4}h3{font-size:14px}small,.muted{color:var(--muted-foreground,#626a78)}small{font-size:12px}code{font:12px/1.5 var(--font-mono,ui-monospace,SFMono-Regular,monospace);overflow-wrap:anywhere}label{display:block}fieldset{border:0;padding:0;margin:0;min-width:0}legend{font-weight:650;margin-bottom:12px;padding:0}.page{max-width:760px;margin:auto}.frame{border:1px solid var(--border,#d7dce5);border-radius:12px;background:var(--card,#fff);overflow:hidden}.frame.narrow{max-width:370px;margin:auto}.bar{display:flex;justify-content:space-between;gap:10px;padding:10px 20px;border-bottom:1px solid var(--border,#d7dce5);font-size:12px;color:var(--muted-foreground,#626a78)}main{padding:24px}.stack{display:grid;gap:20px}.tight{display:grid;gap:8px}.route{display:grid;grid-template-columns:1fr auto 1fr;gap:16px;align-items:center;padding:15px 0;border-bottom:1px solid var(--border,#d7dce5)}.route strong{display:block}.route>div{min-width:0}.arrow{font-size:23px}.choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.choice{padding:15px;border:1px solid var(--border,#cbd1dd);border-radius:9px;cursor:pointer;min-width:0}.choice:has(input:checked){border:2px solid var(--primary,#2858c7);padding:14px;background:var(--muted,#f3f6fb)}.choice:has(input:disabled){opacity:.6;cursor:not-allowed}.option-title{display:flex;gap:9px;align-items:center;margin-bottom:8px}.option-title strong{font-size:20px}.badge{font-size:11px;border:1px solid var(--border,#cbd1dd);padding:1px 6px;border-radius:4px;margin-left:auto}.choice p{min-height:47px}.choice small{display:block;margin-top:6px}.graph{width:100%;height:auto;display:block;margin:12px 0 4px;overflow:visible}.graph .base{fill:none;stroke:var(--muted-foreground,#697180);stroke-width:2}.graph .mine{fill:none;stroke:var(--primary,#2858c7);stroke-width:2}.graph circle{fill:var(--card,#fff);stroke-width:2}.graph text{font:11px var(--font-sans,-apple-system,sans-serif);fill:var(--foreground,#252831);text-anchor:middle}.graph .dot-base{stroke:var(--muted-foreground,#697180)}.graph .dot-mine{stroke:var(--primary,#2858c7)}.graph .merge-dot{fill:var(--primary,#2858c7);stroke:var(--primary,#2858c7)}.graph .merge-text{fill:var(--primary-foreground,#fff)}.note{padding:11px 13px;background:var(--muted,#eef1f6);border-radius:7px;font-size:13px}.note strong{display:block}.warning{border-left:3px solid var(--foreground,#252831)}details{border-top:1px solid var(--border,#d7dce5);padding-top:12px}summary{font-weight:550;font-size:13px}details>div{margin-top:12px}.check{display:flex;align-items:start;gap:10px}.check small{display:block}.buttons{display:flex;gap:10px;flex-wrap:wrap}.buttons .primary{flex:1}.bottom{border-top:1px solid var(--border,#d7dce5);padding:11px 20px;font-size:11px;color:var(--muted-foreground,#626a78)}.lab{margin:20px auto;max-width:760px}.lab>div{display:flex;gap:12px;align-items:end;flex-wrap:wrap}.lab label{flex:1;min-width:170px;font-size:12px}.lab select{margin-top:4px}.steps{list-style:none;margin:0;padding:0}.steps li{padding:8px 0;border-bottom:1px solid var(--border,#d7dce5)}.result-title{font-size:24px}.path{overflow-wrap:anywhere}.row{display:flex;justify-content:space-between;align-items:center;gap:12px}.narrow .choices{grid-template-columns:1fr}.narrow main{padding:18px}.narrow .choice p{min-height:0}.narrow .graph{max-width:300px;margin:8px auto 4px}.narrow .route{gap:10px}.narrow .buttons{flex-direction:column}.narrow h1,.narrow h2{font-size:20px}
+@media(max-width:540px){body{padding:12px}.choices{grid-template-columns:1fr}main{padding:18px}.choice p{min-height:0}.graph{max-width:300px;margin:8px auto 4px}.buttons{flex-direction:column}.route{gap:10px}}@media print{.lab{display:none}}
+</style>
+</head>
+<body><div class="page">
+<div class="frame" id="frame"><div class="bar"><strong>GitFlow Hub</strong><span>收尾原型 · 範例資料</span></div><main id="content"></main><div class="bottom">所有操作皆為模擬，不會修改 Git。只示範本機收尾，不 Push。</div></div>
+<details class="lab"><summary>切換原型情境</summary><div><label>範例情境<select id="scenario"><option value="ready">兩邊都有新提交</option><option value="ff">目標分支沒有前進</option><option value="dirty">還有未提交檔案</option><option value="conflict">預檢發現衝突</option><option value="terminal">終端仍在使用</option><option value="merge-history">工作含合併提交</option><option value="shared">分支已分享</option><option value="unknown">執行結果不明</option></select></label><label>寬度<select id="width"><option value="wide">一般面板</option><option value="narrow">窄側欄（370 px）</option></select></label><button data-action="reset">重設範例</button></div></details>
+</div>
+<script>
+const initial = () => ({view:'form',strategy:'merge',target:'main',squash:false,remove:false,advanced:false,scenario:'ready'});
+let state=initial();
+const source='fix/login';
+const sourcePath='~/worktrees/atlas/fix-login';
+const content=document.getElementById('content');
+const method=()=>state.strategy==='merge'?'Merge':'Rebase';
+const dirty=()=>state.scenario==='dirty';
+const rebaseBlocked=()=>state.scenario==='merge-history'&&!state.squash;
+const rewriting=()=>state.squash||(state.strategy==='rebase'&&state.scenario!=='ff');
+const button=(action,title,primary=false,disabled=false)=>`<button data-action="${action}"${primary?' class="primary"':''}${disabled?' disabled':''}>${title}</button>`;
+const heading=title=>`<h2 id="view-title" tabindex="-1">${title}</h2>`;
+function route(editable=false){return `<div class="route"><div><small>${state.view==='result'?'本次收尾的工作':'要收尾的 worktree'}</small><strong>修正登入畫面</strong><code>${source}</code><small class="path" style="display:block">${sourcePath}</small></div><span class="arrow" aria-hidden="true">→</span><div>${editable?`<label for="target"><small>合回哪個本機分支？</small></label><select id="target"><option value="main"${state.target==='main'?' selected':''}>main</option><option value="release"${state.target==='release'?' selected':''}>release</option></select>`:`<small>接收成果的分支</small><strong>${state.target}</strong>`}</div></div>`;}
+function node(x,y,label,mine=false,merge=false){return `<circle cx="${x}" cy="${y}" r="12" class="${merge?'merge-dot':mine?'dot-mine':'dot-base'}"/><text x="${x}" y="${y+4}"${merge?' class="merge-text"':''}>${label}</text>`;}
+function graph(strategy){
+  const ff=state.scenario==='ff';
+  const one=state.squash;
+  const linear=strategy==='rebase'||ff;
+  const label=ff?'目標沒有前進，直接沿著這個工作的提交前進':linear?'主線進度後接重播後的工作提交，排列成一條線':'原本兩條提交路徑保留，由合併提交M接起來';
+  if(linear){
+    const first=one?(ff?'S':'S′'):(ff?'1':'1′');
+    return `<svg class="graph" viewBox="0 0 280 98" role="img" aria-label="${label}"><text x="64" y="15">目標原有進度</text><text x="211" y="15">${ff?'我的提交':'重播後的提交'}</text><path class="base" d="M22 43H124"/><path class="mine" d="M124 43H${one?205:255}"/>${node(22,43,'A')}${node(73,43,'B')}${node(124,43,'C')}${node(one?205:188,43,first,true)}${one?'':node(255,43,ff?'2':'2′',true)}<text x="140" y="86">${ff?(one?'S 是合成後的提交':'1、2 不必重播，編號不變'):(one?'S′ 是合成後再重播的提交':'1、2 重播成 1′、2′，編號改變')}</text></svg>`;
+  }
+  return `<svg class="graph" viewBox="0 0 280 118" role="img" aria-label="${label}"><text x="92" y="15">目標原有進度</text><path class="base" d="M22 40H255"/><path class="mine" d="M22 40L85 80H184L255 40"/>${node(22,40,'A')}${node(99,40,'B')}${node(177,40,'C')}${node(255,40,'M',false,true)}${one?node(135,80,'S',true):node(99,80,'1',true)+node(177,80,'2',true)}<text x="140" y="112">${one?'先合成 S，再用 M 接起來':'1、2 保持原樣，M 把兩邊接起來'}</text></svg>`;
+}
+function choice(strategy){
+  const merge=strategy==='merge';
+  const disabled=!merge&&rebaseBlocked();
+  const description=merge?(state.squash?'先把我的提交合成一個，再合回。':'保留我的提交，把兩邊接起來。'):(state.squash?'先合成一個提交，接到目標後再合回。':'先把我的提交接到目標後面，再合回。');
+  return `<label class="choice"><span class="option-title"><input type="radio" name="strategy" value="${strategy}"${state.strategy===strategy?' checked':''}${disabled?' disabled':''}><strong>${merge?'Merge':'Rebase'}</strong>${merge?'<span class="badge">預設</span>':''}</span><p>${description}</p>${graph(strategy)}<small>${merge?(state.squash?'來源提交會改寫；分歧時仍可能多一個 M。':'不改寫既有提交；分歧時多一個合併提交 M。'):(disabled?'這個工作含合併提交，本工具目前不能直接使用 Rebase。':state.scenario==='ff'?'本例不必重播，效果與 Merge 相同。':'重播會改變提交編號；已分享分支請先確認。')}</small></label>`;
+}
+function notices(){return `${dirty()?'<div class="note warning"><strong>會先提交全部 3 個變更檔案</strong>包含已暫存、未暫存與新增檔案。<details><summary>本次提交的檔案</summary><div><code>src/Login.tsx<br>src/login.css<br>tests/login.test.ts</code><p>提交訊息：完成 fix/login</p></div></details></div>':''}${rewriting()?`<div class="note warning"><strong>這個工作的提交歷史會改寫</strong>${state.scenario==='shared'?'範例分支已分享，請先與協作者確認。':'若分支已分享，請先與協作者確認。'}不會自動 force push。</div>`:''}${state.remove?`<div class="note warning"><strong>你已選擇完成後移除資料夾</strong><span class="path">${sourcePath}</span><br>通過清理檢查才移除，分支保留。</div>`:''}`;}
+function form(){return `<div class="stack">${heading('完成這個 worktree')}<p class="muted">選擇怎麼把這個工作的成果合回去。</p>${route(true)}<fieldset><legend>用哪一種方式收尾？</legend><div class="choices">${choice('merge')}${choice('rebase')}</div></fieldset><small>${state.scenario==='ff'?'這次目標沒有前進：兩種方式都能直接快轉。':`小圖是「兩邊都有新提交」的教學示意，不是真實提交圖。${state.squash?'S 是合成後的提交。':'1、2 是你的兩次提交。兩種方式預設都保留每個提交。'}`}</small>${rebaseBlocked()?'<div class="note">這個工作含合併提交，本工具目前請用 Merge。若確實要整理歷史，可在其他選項選擇 Squash 後再用 Rebase。</div>':''}<details id="advanced"${state.advanced?' open':''}><summary>其他選項${state.squash?' · Squash':''}${state.remove?' · 移除資料夾':''}</summary><div class="tight"><label class="check"><input type="checkbox" id="squash"${state.squash?' checked':''}><span>把這個工作的提交合成 1 個（Squash）<small>這是額外選項，Merge 與 Rebase 本身不等於 Squash。</small></span></label><label class="check"><input type="checkbox" id="remove"${state.remove?' checked':''}><span>完成後移除 worktree 資料夾<small>預設保留資料夾與分支。</small></span></label></div></details>${notices()}${state.squash&&state.strategy==='merge'?'<div class="note">目前是 Squash + Merge。目標有分歧時，仍可能新增 2 個提交。</div>':''}<div class="buttons">${button('preview',`預覽 ${method()} 收尾`,true)}</div><small>先檢查，下一步確認後才會執行。</small></div>`;}
+function steps(){
+  const lines=[];
+  if(dirty())lines.push('先提交全部 3 個變更檔案。');
+  if(state.squash)lines.push('將這個工作的提交合成一個（Squash）。');
+  if(state.strategy==='rebase'&&state.scenario!=='ff')lines.push(`把這個工作的提交接到 ${state.target} 後面（Rebase）。`);
+  lines.push(state.strategy==='rebase'||state.scenario==='ff'?`讓 ${state.target} 快轉到這個工作的成果。`:`把這個工作的成果 Merge 到 ${state.target}。`);
+  if(state.remove)lines.push(`檢查通過後移除 ${sourcePath}，保留分支。`);
+  lines.push(`在 Orca 開啟 ${state.target}。`);
+  return lines.map((line,index)=>`<li>${index+1}. ${line}</li>`).join('');
+}
+function blocker(){
+  const conflict=state.scenario==='conflict';
+  return `<div class="stack">${heading(conflict?'需要先處理衝突':'請先關閉使用中的終端')}${route()}<div class="note warning">${conflict?'src/Login.tsx 的同一段內容有不同修改。':'fix/login 的 zsh 終端仍開著。'}</div><p>${conflict?'請回到 Orca 的來源工作資料夾，人工處理衝突後再重新檢查。':'請在 Orca 關閉來源與目標的終端及 AI 助手，再重新檢查。'}</p><small>這次停在預覽，尚未執行提交、合併或清理。</small><div class="buttons">${button('form','返回選擇')}${conflict?'':button('resolved','模擬已關閉，重新檢查',true)}</div></div>`;
+}
+function preview(){
+  if(['conflict','terminal'].includes(state.scenario))return blocker();
+  return `<div class="stack">${heading(`確認 ${method()} 收尾`)}${route()}<div class="note"><strong>${state.target} 會收到這個工作的成果</strong>${state.strategy==='merge'?(state.squash?'先整理來源提交，再合回。分歧時多一個合併提交。':'保留原本提交。兩邊有分歧時，用一個合併提交接起來。'):state.scenario==='ff'?'這次目標沒有前進，不必重播提交，直接快轉。':'先 Rebase 這個工作，再快轉目標分支，完成合回。'}<p>${state.remove?'完成後依清理檢查結果處理資料夾。':'保留 worktree 資料夾與分支。'}</p></div>${notices()}<ol class="steps">${steps()}</ol><small>只更新本機，不 Push。Git 預檢不代表程式測試通過。</small><div class="buttons">${button('execute',`模擬確認 ${method()}`,true)}${button('form','返回選擇')}</div></div>`;
+}
+function result(){
+  if(state.scenario==='unknown')return `<div class="stack">${heading('需要先核對實際結果')}${route()}<div class="note warning"><strong>無法確認收尾是否完成</strong>保留工作資料夾，請勿重送操作。</div><p>請在 Orca 核對 ${source} 與 ${state.target} 的提交紀錄、檔案狀態及進行中的 Git 操作。</p><small>原型不提供一鍵還原或再次執行。正式產品須依實際步驟回報結果。</small></div>`;
+  return `<div class="stack">${heading(`示意結果：已合回 ${state.target}`)}<p class="muted">目前開啟：${state.target}</p>${route()}<div class="note"><strong>${method()} 收尾完成</strong>${state.remove?'本例清理檢查通過，已移除來源資料夾，分支保留。':'來源 worktree 資料夾與分支都保留。'}<br>沒有推送到 GitHub。</div><small>這是模擬結果，沒有執行 Git。</small></div>`;
+}
+const views={form,preview,result};
+function render(focus=true){content.innerHTML=views[state.view]();if(focus)document.getElementById('view-title')?.focus({preventScroll:true});}
+function reset(scenario='ready'){state={...initial(),scenario};document.getElementById('scenario').value=scenario;render();}
+function action(name){
+  if(name==='reset'){reset();return;}
+  if(name==='resolved'){state={...state,scenario:'ready',view:'preview'};render();return;}
+  if(name==='execute'){state={...state,view:'result'};render();return;}
+  if(name==='form'||name==='preview'){state={...state,view:name};render();}
+}
+document.addEventListener('click',event=>{const item=event.target.closest('button[data-action]');if(item&&!item.disabled)action(item.dataset.action);});
+document.addEventListener('change',event=>{
+  const field=event.target;
+  if(field.id==='scenario'){reset(field.value);return;}
+  if(field.id==='width'){document.getElementById('frame').classList.toggle('narrow',field.value==='narrow');return;}
+  if(field.id==='target')state={...state,target:field.value};
+  if(field.name==='strategy')state={...state,strategy:field.value};
+  if(field.id==='squash')state={...state,squash:field.checked,strategy:!field.checked&&state.scenario==='merge-history'?'merge':state.strategy};
+  if(field.id==='remove')state={...state,remove:field.checked};
+  const selector=field.id?`#${field.id}`:`input[name="strategy"][value="${field.value}"]`;
+  render(false);content.querySelector(selector)?.focus({preventScroll:true});
+});
+document.addEventListener('toggle',event=>{if(event.target.id==='advanced'&&event.target.isConnected)state={...state,advanced:event.target.open};},true);
+render(false);
+</script></body></html>

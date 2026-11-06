@@ -3,7 +3,7 @@ import { assert, mockHost, mount, test, type TestPanel } from 'orca/testing'
 import type { GitSnapshot, Workspace } from './contracts'
 import type { Dashboard, Execution, HubAction, HubList, Preview } from './protocol'
 import * as panel from './panel'
-import { requests, snapshot, workspaces } from './panel.check.ts'
+import { expandFinishOptions, requests, snapshot, workspaces } from './panel.check.ts'
 import { previewAdvice, state, writeAdvice } from './panel-state'
 
 function deferred<T>() {
@@ -73,13 +73,7 @@ function fixture(rows: Workspace[] = workspaces) {
 
 async function finishPreview(view: TestPanel) {
   await view.press({ testId: `finish:${workspaces[0].id}` })
-  await view.press({ text: '下一步：確認' })
-}
-
-async function openPrDraft(view: TestPanel, workspaceId: string) {
-  await view.press({ testId: `inspect:${workspaceId}` })
-  await view.toggle({ label: 'GitHub PR' })
-  await view.toggle({ label: '建立 Draft PR' })
+  await view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
 }
 
 test('同專案切換工作樹會更新目前標記與下一次建立的來源', async () => {
@@ -111,14 +105,15 @@ test('跨專案切換清除搜尋及舊合併確認，不會執行舊 token', as
   await f.emit(view)
   assert.equal(view.valueOf({ label: '專案' }), 'docs')
   assert.equal(read(state.search), '')
-  assert.equal(view.find({ text: '確認，開始合併' }), null)
+  assert.equal(view.find({ text: /^確認 (Merge|Rebase) 到 / }), null)
   assert.equal(view.find({ label: '4. 這次完成了什麼' }), null)
-  assert.ok(view.find({ testId: `inspect:${workspaces[2].id}` }))
+  assert.ok(view.find({ text: '目前在主要分支' }))
+  assert.equal(read(state.dashboard)?.activeWorkspaceId, workspaces[2].id)
   assert.equal(f.calls('hub.execute').length, 0)
   await view.unmount()
 })
 
-test('切換後建立草稿與 PR 欄位不會帶到新的工作樹', async () => {
+test('切換後建立草稿與收尾選項不會帶到新的工作樹', async () => {
   const f = fixture()
   const view = await mount(panel, { host: f.host })
   await view.press({ text: '開始新工作' })
@@ -136,16 +131,22 @@ test('切換後建立草稿與 PR 欄位不會帶到新的工作樹', async () =
   await view.select({ label: '建立後啟動 AI 助手' }, 'claude')
   assert.equal(view.valueOf({ label: '請 AI 做什麼' }), '')
   await view.press({ text: '返回工作清單' })
-  await openPrDraft(view, workspaces[2].id)
-  await view.type({ label: '目標分支' }, 'docs-main')
-  await view.type({ label: 'PR 標題' }, '舊 PR')
-  await view.type({ label: 'PR 說明' }, '舊說明')
   f.activate(workspaces[0].id)
   await f.emit(view)
-  await openPrDraft(view, workspaces[0].id)
-  assert.equal(view.valueOf({ label: '目標分支' }), '')
-  assert.equal(view.valueOf({ label: 'PR 標題' }), '')
-  assert.equal(view.valueOf({ label: 'PR 說明' }), '')
+  await view.press({ testId: `finish:${workspaces[0].id}` })
+  await view.select({ label: '合併方式' }, 'rebase')
+  await expandFinishOptions(view)
+  await view.toggle({ label: '合成 1 個提交（Squash）' })
+  await view.toggle({ label: '完成後移除資料夾' })
+  f.activate(workspaces[2].id)
+  await f.emit(view)
+  f.activate(workspaces[0].id)
+  await f.emit(view)
+  await view.press({ testId: `finish:${workspaces[0].id}` })
+  assert.equal(view.valueOf({ label: '合併方式' }), 'merge')
+  await expandFinishOptions(view)
+  assert.equal(view.valueOf({ label: '合成 1 個提交（Squash）' }), false)
+  assert.equal(view.valueOf({ label: '完成後移除資料夾' }), false)
   await view.unmount()
 })
 
@@ -169,8 +170,9 @@ test('不同專案的同名分支與同名工作仍以身分切換', async () =>
   f.activate(workspaces[2].id)
   await f.emit(view)
   assert.equal(view.valueOf({ label: '專案' }), 'docs')
-  assert.ok(view.find({ testId: `inspect:${workspaces[2].id}` }))
-  assert.equal(view.find({ testId: `inspect:${workspaces[0].id}` }), null)
+  assert.ok(view.find({ text: '目前在主要分支' }))
+  assert.equal(read(state.dashboard)?.activeWorkspaceId, workspaces[2].id)
+  assert.equal(view.find({ testId: `finish:${workspaces[0].id}` }), null)
   await view.unmount()
 })
 
@@ -193,7 +195,8 @@ test('較慢的工作樹事件清單不會覆蓋後來的切換', async () => {
   await Promise.all([earlier, later])
   assert.equal(view.valueOf({ label: '專案' }), 'docs')
   assert.equal(f.calls('hub.dashboard').length, reads)
-  assert.ok(view.find({ testId: `inspect:${workspaces[2].id}` }))
+  assert.ok(view.find({ text: '目前在主要分支' }))
+  assert.equal(read(state.dashboard)?.activeWorkspaceId, workspaces[2].id)
   await view.unmount()
 })
 
@@ -204,7 +207,7 @@ test('執行中多次切換延後同步，保留部分完成結果且不重送�
   const started = deferred<void>()
   f.overrides.execute = () => { started.resolve(); return execution.promise }
   await finishPreview(view)
-  const running = view.press({ text: '確認，開始合併' })
+  const running = view.press({ text: /^確認 (Merge|Rebase) 到 / })
   await started.promise
   const before = f.calls('hub.list').length
   f.activate(workspaces[1].id)
@@ -252,7 +255,7 @@ test('執行失敗後跟隨新工作樹，仍保留原操作的錯誤', async ()
   const started = deferred<void>()
   f.overrides.execute = () => { started.resolve(); return execution.promise }
   await finishPreview(view)
-  const running = view.press({ text: '確認，開始合併' })
+  const running = view.press({ text: /^確認 (Merge|Rebase) 到 / })
   await started.promise
   f.activate(workspaces[2].id)
   const event = f.emit(view)
@@ -260,7 +263,7 @@ test('執行失敗後跟隨新工作樹，仍保留原操作的錯誤', async ()
   await Promise.all([running, event])
   assert.equal(view.valueOf({ label: '專案' }), 'docs')
   assert.ok(view.find({ text: '原操作結果未知，請核對。' }))
-  assert.equal(view.find({ text: '確認，開始合併' }), null)
+  assert.equal(view.find({ text: /^確認 (Merge|Rebase) 到 / }), null)
   assert.equal(f.calls('hub.execute').length, 1)
   await view.unmount()
 })
@@ -275,11 +278,11 @@ for (const delayed of ['inspect', 'preview'] as const) {
     let oldRead: Promise<void>
     if (delayed === 'inspect') {
       f.overrides.inspect = () => { started.resolve(); return oldInspect.promise }
-      oldRead = view.press({ testId: `inspect:${workspaces[0].id}` })
+      oldRead = view.press({ testId: `finish:${workspaces[0].id}` })
     } else {
       await view.press({ testId: `finish:${workspaces[0].id}` })
       f.overrides.preview = () => { started.resolve(); return oldPreview.promise }
-      oldRead = view.press({ text: '下一步：確認' })
+      oldRead = view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
     }
     await started.promise
     f.activate(workspaces[2].id)
@@ -289,12 +292,12 @@ for (const delayed of ['inspect', 'preview'] as const) {
     oldPreview.resolve({ token: 'old-token', title: '舊預覽', summary: '不得復活', detail: '' })
     await Promise.all([oldRead, event])
     assert.equal(view.valueOf({ label: '專案' }), 'docs')
-    assert.equal(view.find({ text: '確認，開始合併' }), null)
+    assert.equal(view.find({ text: /^確認 (Merge|Rebase) 到 / }), null)
     assert.equal(view.find({ text: 'OLD_BRANCH' }), null)
-    // 切換後詳情與合併頁都已關閉，畫面看不到舊回覆；直接核對 state，確保舊 token／快照沒有寫回。
+    // 切換後收尾頁已關閉，直接核對 state，確保舊 token／快照沒有寫回。
     assert.equal(read(state.preview), null)
     assert.notEqual(read(state.snapshot)?.branch, 'OLD_BRANCH')
-    assert.equal(view.find({ label: '查看變更：feature/login' }), null)
+    assert.equal(view.find({ type: 'Heading', text: '完成工作' }), null)
     assert.equal(f.calls('hub.execute').length, 0)
     await view.unmount()
   })
@@ -305,7 +308,7 @@ test('完成後才收到自動開啟目標的切換事件，仍保留逐步結�
   f.overrides.execute = partialOutcome
   const view = await mount(panel, { host: f.host })
   await finishPreview(view)
-  await view.press({ text: '確認，開始合併' })
+  await view.press({ text: /^確認 (Merge|Rebase) 到 / })
   assert.ok(view.find({ text: '來源有新變更' }))
   f.activate(workspaces[1].id)
   await f.emit(view)
@@ -329,7 +332,7 @@ test('執行前已送出的切換查詢在完成後才回來，不會清掉結�
   await started.promise
   f.overrides.list = undefined
   f.overrides.execute = partialOutcome
-  const running = view.press({ text: '確認，開始合併' })
+  const running = view.press({ text: /^確認 (Merge|Rebase) 到 / })
   await until(() => !read(state.executing) && Boolean(read(state.execution)))
   old.resolve(oldList)
   await Promise.all([event, running])
@@ -350,7 +353,8 @@ test('初次讀取失敗後，第一次切換仍會載入新的工作樹', async
   await f.emit(view)
   assert.equal(view.valueOf({ label: '專案' }), 'docs')
   assert.equal(view.find({ text: /初次讀取失敗/ }), null)
-  assert.ok(view.find({ testId: `inspect:${workspaces[2].id}` }))
+  assert.ok(view.find({ text: '目前在主要分支' }))
+  assert.equal(read(state.dashboard)?.activeWorkspaceId, workspaces[2].id)
   await view.unmount()
 })
 
@@ -382,7 +386,7 @@ test('失去目前工作樹會清除操作入口，卸載後不再接收事件',
   await finishPreview(view)
   f.activate(null)
   await f.emit(view)
-  assert.equal(view.find({ text: '確認，開始合併' }), null)
+  assert.equal(view.find({ text: /^確認 (Merge|Rebase) 到 / }), null)
   assert.equal(view.find({ text: '開始新工作' }), null)
   assert.ok(view.find({ text: '目前沒有可用的本機工作樹，請在 Orca 選擇一個 Git 工作樹。' }))
   await view.unmount()

@@ -1,7 +1,7 @@
 import { assert, mockHost, mount, test } from 'orca/testing'
 import type { Execution, HubAction } from './protocol'
 import * as panel from './panel'
-import { dashboardFor, prDetail, requests, snapshot, workspaces } from './panel.check.ts'
+import { expandFinishOptions, dashboardFor, requests, snapshot, workspaces } from './panel.check.ts'
 
 function calls(host: ReturnType<typeof mockHost>, name: string) {
   return host.calls.filter((call) => call.method === 'plugin.request' &&
@@ -15,7 +15,7 @@ function fixtureHost(execution: Execution = { message: '操作完成。', status
     'hub.preview': (action) => {
       previews.push(action)
       return { token: 'preview-token', title: '操作預覽', summary: '確認後才會寫入。', detail: JSON.stringify(action),
-        ...(action.kind === 'finish' ? { steps: ['提交全部變更', '合回 main', '開啟 main', '安全清理來源'] } : {}) }
+        ...(action.kind === 'finish' ? { steps: ['提交全部變更', '合回 main', '開啟 main', action.remove ? '安全清理來源' : '保留來源資料夾'] } : {}) }
     },
     'hub.execute': execution
   } })
@@ -30,14 +30,9 @@ function manyWorkspaces() {
   return { all, list: { workspaces: all, warnings: [] }, dashboard: { ...dashboardFor(), workspaces: all } }
 }
 
-async function inspect(view: Awaited<ReturnType<typeof mount>>, workspaceId = workspaces[0].id) {
+async function openFinish(view: Awaited<ReturnType<typeof mount>>, workspaceId = workspaces[0].id) {
   if (view.find({ text: '返回工作清單' })) await view.press({ text: '返回工作清單' })
-  await view.press({ testId: `inspect:${workspaceId}` })
-}
-
-async function inspectGit(view: Awaited<ReturnType<typeof mount>>) {
-  await inspect(view)
-  await view.toggle({ label: 'Git 差異與逐檔提交' })
+  await view.press({ testId: `finish:${workspaceId}` })
 }
 
 test('首屏依目前專案顯示摘要，不先讀完整 Diff 或預設第一個專案', async () => {
@@ -48,8 +43,8 @@ test('首屏依目前專案顯示摘要，不先讀完整 Diff 或預設第一�
   assert.equal(view.valueOf({ label: '專案' }), 'repo')
   assert.deepEqual((calls(host, 'hub.dashboard')[0].params as { input: unknown }).input, {})
   assert.equal(calls(host, 'hub.inspect').length, 0)
-  assert.ok(view.find({ testId: `inspect:${workspaces[0].id}` }))
-  assert.equal(view.find({ testId: `inspect:${workspaces[2].id}` }), null)
+  assert.ok(view.find({ testId: `finish:${workspaces[0].id}` }))
+  assert.equal(view.find({ testId: `open:${workspaces[2].id}` }), null)
   assert.ok(view.find({ text: /2 個檔案未提交/ }))
   assert.equal(view.find({ text: '領先 2 · 落後 0' }), null)
   assert.equal(view.find({ text: '補上登入驗證' }), null)
@@ -75,14 +70,14 @@ test('工作多時可搜尋其他工作，目前的工作不受搜尋影響', as
   const host = mockHost({ requests: { ...requests, 'hub.list': many.list, 'hub.dashboard': many.dashboard } })
   const view = await mount(panel, { host })
   await view.type({ label: '搜尋工作' }, 'extra-1')
-  assert.ok(view.find({ testId: 'inspect:repo::/fixture/extra-1' }))
-  assert.equal(view.find({ testId: 'inspect:repo::/fixture/extra-2' }), null)
-  assert.equal(view.find({ testId: `inspect:${workspaces[1].id}` }), null)
+  assert.ok(view.find({ testId: 'finish:repo::/fixture/extra-1' }))
+  assert.equal(view.find({ testId: 'finish:repo::/fixture/extra-2' }), null)
+  assert.equal(view.find({ testId: `open:${workspaces[1].id}` }), null)
   assert.ok(view.find({ testId: `finish:${workspaces[0].id}` }))
   await view.unmount()
 })
 
-test('長清單選收尾或檢視後聚焦內容，確認預覽位於檔案清單之前', async () => {
+test('長清單選收尾後聚焦內容，確認預覽位於檔案清單之前', async () => {
   const extras = Array.from({ length: 30 }, (_, index) => ({ ...workspaces[0],
     id: `repo::/fixture/extra-${index}`, branch: `feature/extra-${index}`, isActive: false }))
   const all = [workspaces[1], ...extras, workspaces[0], workspaces[2]]
@@ -93,14 +88,14 @@ test('長清單選收尾或檢視後聚焦內容，確認預覽位於檔案清�
       detail: '完整差異很長', steps: ['提交全部變更', '合回 main', '開啟 main', '清理來源'] }
   } })
   const view = await mount(panel, { host })
-  assert.ok(view.find({ testId: 'inspect:repo::/fixture/extra-29' }))
+  assert.ok(view.find({ testId: 'finish:repo::/fixture/extra-29' }))
   await view.press({ testId: `finish:${workspaces[0].id}` })
   assert.equal(view.find({ label: '搜尋工作' }), null)
   assert.equal(view.find({ text: '開始新工作' }), null)
-  assert.equal(view.find({ testId: `inspect:${workspaces[1].id}` }), null)
+  assert.equal(view.find({ testId: `open:${workspaces[1].id}` }), null)
   assert.ok(view.find({ type: 'Heading', text: '完成工作' }))
   assert.ok(view.find({ text: 'feature/login' }))
-  await view.press({ text: '下一步：確認' })
+  await view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
   assert.equal(view.findAll({ type: 'Card' })[0]?.label, '最後確認')
   assert.equal(view.find({ label: '4. 這次完成了什麼' }), null)
   assert.ok(view.find({ text: 'feature/login → main' }))
@@ -110,14 +105,14 @@ test('長清單選收尾或檢視後聚焦內容，確認預覽位於檔案清�
   assert.equal(view.find({ text: '完整差異很長' }), null)
   assert.equal(calls(host, 'hub.execute').length, 0)
   await view.press({ text: '返回工作清單' })
-  assert.equal(view.find({ text: '確認，開始合併' }), null)
+  assert.equal(view.find({ text: /^確認 (Merge|Rebase) 到 / }), null)
   assert.ok(view.find({ label: '搜尋工作' }))
-  await inspect(view)
+  await openFinish(view)
   assert.equal(view.find({ label: '搜尋工作' }), null)
   assert.equal(view.find({ text: '開始新工作' }), null)
-  assert.equal(view.findAll({ type: 'Card' })[0]?.label, '查看變更：feature/login')
+  assert.ok(view.find({ type: 'Heading', text: '完成工作' }))
   await view.press({ text: '返回工作清單' })
-  assert.ok(view.find({ testId: `inspect:${workspaces[1].id}` }))
+  assert.ok(view.find({ testId: `open:${workspaces[1].id}` }))
   await view.unmount()
 })
 
@@ -126,20 +121,22 @@ test('收尾只接受同專案目標，一次預覽全部變更與四個步驟',
   const view = await mount(panel, { host })
   await view.press({ testId: `finish:${workspaces[0].id}` })
   assert.deepEqual(view.find({ label: '合併到' })?.props.options, [{ value: workspaces[1].id, label: 'main（主要分支）' }])
-  assert.equal(view.valueOf({ label: '完成後移除資料夾' }), true)
+  await expandFinishOptions(view)
+  assert.equal(view.valueOf({ label: '完成後移除資料夾' }), false)
   assert.equal(view.valueOf({ label: '合併方式' }), 'merge')
+  await expandFinishOptions(view)
   assert.equal(view.valueOf({ label: '合成 1 個提交（Squash）' }), false)
   assert.ok(view.find({ label: '收尾時提交 2 個檔案' }))
   await view.toggle({ label: '收尾時提交 2 個檔案' })
   assert.ok(view.find({ text: /src\/login.ts/ }))
   assert.ok(view.find({ text: /notes.md/ }))
-  await view.press({ text: '下一步：確認' })
+  await view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
   assert.deepEqual(previews, [{ kind: 'finish', workspaceId: workspaces[0].id,
-    targetWorkspaceId: workspaces[1].id, message: '完成 feature/login', remove: true, strategy: 'merge', squash: false }])
+    targetWorkspaceId: workspaces[1].id, message: '完成 feature/login', remove: false, strategy: 'merge', squash: false }])
   await view.toggle({ label: '執行步驟與提交訊息' })
-  assert.ok(view.find({ text: '4. 安全清理來源' }))
+  assert.ok(view.find({ text: '4. 保留來源資料夾' }))
   assert.equal(calls(host, 'hub.execute').length, 0)
-  await view.press({ text: '確認，開始合併' })
+  await view.press({ text: /^確認 (Merge|Rebase) 到 / })
   assert.equal(calls(host, 'hub.execute').length, 1)
   await view.unmount()
 })
@@ -154,9 +151,9 @@ test('乾淨來源明示略過提交，不要求訊息或送出提交操作', as
   await view.press({ testId: `finish:${workspaces[0].id}` })
   assert.ok(view.find({ text: '沒有未提交的變更。' }))
   assert.equal(view.find({ label: '4. 這次完成了什麼' }), null)
-  await view.press({ text: '下一步：確認' })
+  await view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
   assert.deepEqual(previews, [{ kind: 'finish', workspaceId: workspaces[0].id,
-    targetWorkspaceId: workspaces[1].id, message: '', remove: true, strategy: 'merge', squash: false }])
+    targetWorkspaceId: workspaces[1].id, message: '', remove: false, strategy: 'merge', squash: false }])
   await view.unmount()
 })
 
@@ -170,8 +167,8 @@ test('收尾部分成功逐步呈現，不顯示全流程成功並切至回傳�
     ] })
   const view = await mount(panel, { host })
   await view.press({ testId: `finish:${workspaces[0].id}` })
-  await view.press({ text: '下一步：確認' })
-  await view.press({ text: '確認，開始合併' })
+  await view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
+  await view.press({ text: /^確認 (Merge|Rebase) 到 / })
   assert.ok(view.find({ label: '還沒全部完成' }))
   assert.equal(view.find({ label: '完成了' }), null)
   assert.ok(view.find({ text: '已建立 abc123' }))
@@ -179,7 +176,7 @@ test('收尾部分成功逐步呈現，不顯示全流程成功並切至回傳�
   await view.press({ text: '開啟「main」資料夾' })
   assert.deepEqual((calls(host, 'hub.open')[0].params as { input: unknown }).input, { workspaceId: workspaces[1].id })
   assert.equal(view.findAll({ type: 'Callout' }).some((entry) => entry.props.tone === 'success'), false)
-  await inspect(view)
+  await openFinish(view)
   assert.equal(view.find({ label: '還沒全部完成' }), null)
   await view.unmount()
 })
@@ -285,7 +282,7 @@ test('建立基準仍為必填，來源不存在時無法提交', async () => {
     'hub.dashboard': { workspaces: [], warnings: [], repoId: '', summaries: [] }
   } })
   const empty = await mount(panel, { host: emptyHost })
-  assert.equal(empty.find({ text: '下一步：確認' }), null)
+  assert.equal(empty.find({ text: /^預覽 (Merge|Rebase) 收尾$/ }), null)
   assert.equal(calls(emptyHost, 'hub.inspect').length, 0)
   assert.equal(calls(emptyHost, 'hub.preview').length, 0)
   await empty.unmount()
@@ -295,12 +292,12 @@ test('專案切換會清除來源、預覽與提交訊息，不沿用跨專案�
   const { host } = fixtureHost()
   const view = await mount(panel, { host })
   await view.press({ testId: `finish:${workspaces[0].id}` })
-  await view.press({ text: '下一步：確認' })
+  await view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
   await view.select({ label: '專案' }, 'docs')
-  assert.equal(view.find({ text: '確認，開始合併' }), null)
+  assert.equal(view.find({ text: /^確認 (Merge|Rebase) 到 / }), null)
   assert.equal(view.find({ label: '4. 這次完成了什麼' }), null)
-  assert.equal(view.find({ testId: `inspect:${workspaces[0].id}` }), null)
-  assert.ok(view.find({ testId: `inspect:${workspaces[2].id}` }))
+  assert.equal(view.find({ testId: `finish:${workspaces[0].id}` }), null)
+  assert.ok(view.find({ testId: `open:${workspaces[2].id}` }))
   assert.equal(calls(host, 'hub.execute').length, 0)
   await view.unmount()
 })
@@ -329,28 +326,32 @@ test('跨專案較慢的 dashboard 回覆不能覆蓋較新的選擇', async () 
   await Promise.all([oldSelection, latest])
   assert.equal(delayed, true)
   assert.equal(view.valueOf({ label: '專案' }), 'repo')
-  assert.equal(view.find({ testId: `inspect:${workspaces[2].id}` }), null)
+  assert.equal(view.find({ testId: `open:${workspaces[2].id}` }), null)
   await view.unmount()
 })
 
-test('較慢的工作樹 Diff 不會覆蓋新選取的來源', async () => {
+test('較慢的工作樹狀態不會覆蓋新選取的來源', async () => {
+  const other = { ...workspaces[0], id: 'repo::/fixture/other', branch: 'feature/other', isActive: false }
+  const all = [...workspaces, other]
   const slow = deferred<typeof snapshot>()
   const started = deferred<void>()
   const host = mockHost({ requests: { ...requests,
+    'hub.list': { workspaces: all, warnings: [] },
+    'hub.dashboard': { ...dashboardFor(), workspaces: all },
     'hub.inspect': ({ workspaceId }) => {
-      if (workspaceId === workspaces[1].id) { started.resolve(); return slow.promise }
+      if (workspaceId === other.id) { started.resolve(); return slow.promise }
       return snapshot
     }
   } })
   const view = await mount(panel, { host })
-  const oldSelection = inspect(view, workspaces[1].id)
+  const oldSelection = openFinish(view, other.id)
   await started.promise
-  const latest = inspect(view)
-  slow.resolve({ ...snapshot, branch: 'OLD_MAIN' })
+  const latest = openFinish(view)
+  slow.resolve({ ...snapshot, branch: 'OLD_BRANCH' })
   await Promise.all([oldSelection, latest])
-  await view.toggle({ label: 'Git 差異與逐檔提交' })
-  assert.equal(view.find({ text: 'OLD_MAIN' }), null)
+  assert.equal(view.find({ text: 'OLD_BRANCH' }), null)
   assert.ok(view.find({ text: 'feature/login' }))
+  assert.ok(view.find({ text: '會先提交全部 2 個變更檔案' }))
   await view.unmount()
 })
 
@@ -362,13 +363,14 @@ test('較慢的收尾預覽不能回到新選取的工作樹', async () => {
   } })
   const view = await mount(panel, { host })
   await view.press({ testId: `finish:${workspaces[0].id}` })
-  const oldPreview = view.press({ text: '下一步：確認' })
+  const oldPreview = view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
   await started.promise
-  const latest = inspect(view, workspaces[1].id)
+  const latest = view.select({ label: '專案' }, 'docs')
   slow.resolve({ token: 'old', title: '舊預覽', summary: '不應顯示', detail: '' })
   await Promise.all([oldPreview, latest])
-  assert.equal(view.find({ text: '確認，開始合併' }), null)
-  assert.ok(view.find({ label: '查看變更：main' }))
+  assert.equal(view.find({ text: /^確認 (Merge|Rebase) 到 / }), null)
+  assert.equal(view.valueOf({ label: '專案' }), 'docs')
+  assert.ok(view.find({ testId: `open:${workspaces[2].id}` }))
   assert.equal(calls(host, 'hub.execute').length, 0)
   await view.unmount()
 })
@@ -385,7 +387,7 @@ test('重新整理失敗後不沿用舊的來源狀態或乾淨摘要', async ()
   await view.press({ testId: `finish:${workspaces[0].id}` })
   await view.press({ label: '重新整理' })
   assert.ok(view.find({ text: /狀態查詢失敗/ }))
-  assert.equal(view.find({ text: '下一步：確認' })?.disabled, true)
+  assert.equal(view.find({ text: /^預覽 (Merge|Rebase) 收尾$/ })?.disabled, true)
   assert.equal(calls(host, 'hub.preview').length, 0)
   await view.press({ text: '返回工作清單' })
   assert.ok(view.find({ text: '暫時無法讀取變更' }))
@@ -411,64 +413,26 @@ test('摘要載入期間搜尋不會取消查詢', async () => {
   slow.resolve(many.dashboard)
   await Promise.all([refreshing, searching])
   assert.ok(view.find({ text: /2 個檔案未提交/ }))
-  assert.equal(view.find({ testId: `inspect:${workspaces[1].id}` }), null)
+  assert.equal(view.find({ testId: `open:${workspaces[1].id}` }), null)
   await view.unmount()
 })
 
-test('檢視內仍能選檔暫存，未確認不寫入，欄位變更會使預覽失效', async () => {
-  const { host, previews } = fixtureHost()
-  const view = await mount(panel, { host })
-  await inspectGit(view)
-  await view.toggle({ label: 'src/login.ts' })
-  await view.press({ text: '預覽暫存選取檔案' })
-  assert.deepEqual(previews, [{ kind: 'stage', workspaceId: workspaces[0].id,
-    paths: ['src/login.ts'], fingerprint: snapshot.fingerprint }])
-  assert.equal(calls(host, 'hub.execute').length, 0)
-  assert.ok(view.find({ text: '確認執行' }))
-  assert.equal(view.find({ label: '提交訊息' }), null)
-  await view.press({ text: '返回修改' })
-  if (!view.find({ label: '提交訊息' })) await view.toggle({ label: 'Git 差異與逐檔提交' })
-  await view.type({ label: '提交訊息' }, 'feat: changed')
-  assert.equal(view.find({ text: '確認執行' }), null)
-  await view.unmount()
-})
-
-test('GitHub 位於工作樹詳情，保留 UNKNOWN 且只提供合併連結', async () => {
+test('首頁與收尾只保留工作操作，不提供查看變更、Git 或 PR 詳情入口', async () => {
   const { host } = fixtureHost()
   const view = await mount(panel, { host })
-  assert.equal(view.find({ label: 'GitHub PR' }), null)
-  await inspect(view)
-  await view.toggle({ label: 'GitHub PR' })
-  await view.press({ text: '#7 登入功能' })
-  assert.ok(view.find({ text: '審查決策：UNKNOWN' }))
-  assert.ok(view.find({ text: 'CI：UNKNOWN（尚無檢查結果）' }))
-  assert.equal(view.find({ text: '在 GitHub 審查與合併' })?.props.href, prDetail.pr.url)
+  const noDetailUi = () => {
+    assert.equal(view.find({ text: '查看變更' }), null)
+    assert.equal(view.find({ testId: `inspect:${workspaces[0].id}` }), null)
+    assert.equal(view.find({ label: 'Git 差異與逐檔提交' }), null)
+    assert.equal(view.find({ label: 'GitHub PR' }), null)
+    assert.equal(view.find({ text: '預覽提交' }), null)
+  }
+  noDetailUi()
+  await openFinish(view)
+  noDetailUi()
+  assert.equal(calls(host, 'hub.prs').length, 0)
+  assert.equal(calls(host, 'hub.pr').length, 0)
   assert.equal(calls(host, 'hub.execute').length, 0)
-  assert.deepEqual(view.refusals, [])
-  await view.unmount()
-})
-
-test('AI 草稿與 Draft PR 仍可從次要詳情到達', async () => {
-  const { host, previews } = fixtureHost()
-  const view = await mount(panel, { host })
-  await inspectGit(view)
-  await view.toggle({ label: 'AI 提交訊息草稿' })
-  await view.select({ label: 'AI 草稿 Agent' }, 'claude')
-  await view.press({ text: '預覽委派 AI 草稿' })
-  assert.deepEqual(previews[0], { kind: 'ai-message', workspaceId: workspaces[0].id, agent: 'claude' })
-  await view.press({ text: '返回修改' })
-  if (!view.find({ label: '提交訊息' })) await view.toggle({ label: 'Git 差異與逐檔提交' })
-  if (!view.find({ text: '匯入 AI 草稿' })) await view.toggle({ label: 'AI 提交訊息草稿' })
-  await view.press({ text: '匯入 AI 草稿' })
-  assert.equal(view.valueOf({ label: '提交訊息' }), 'feat: 補上登入驗證')
-  await view.toggle({ label: 'GitHub PR' })
-  await view.toggle({ label: '建立 Draft PR' })
-  await view.type({ label: '目標分支' }, 'main')
-  await view.type({ label: 'PR 標題' }, '登入驗證')
-  await view.type({ label: 'PR 說明' }, '新增測試')
-  await view.press({ text: '預覽建立 Draft PR' })
-  assert.deepEqual(previews[1], { kind: 'draft', workspaceId: workspaces[0].id,
-    targetBranch: 'main', title: '登入驗證', description: '新增測試' })
   await view.unmount()
 })
 
@@ -492,12 +456,12 @@ test('執行中的第二次點擊不會重複送出 token', async () => {
   } })
   const view = await mount(panel, { host })
   await view.press({ testId: `finish:${workspaces[0].id}` })
-  await view.press({ text: '下一步：確認' })
-  const running = view.press({ text: '確認，開始合併' })
+  await view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
+  const running = view.press({ text: /^確認 (Merge|Rebase) 到 / })
   await started.promise
   // 執行中確認按鈕換成進度說明，沒有東西可以再按一次（等面板重繪後檢查）。
-  for (let round = 0; round < 50 && view.find({ text: '確認，開始合併' }); round++) await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(view.find({ text: '確認，開始合併' }), null)
+  for (let round = 0; round < 50 && view.find({ text: /^確認 (Merge|Rebase) 到 / }); round++) await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(view.find({ text: /^確認 (Merge|Rebase) 到 / }), null)
   execution.resolve({ message: '操作完成。', status: 'completed' })
   await running
   assert.equal(calls(host, 'hub.execute').length, 1)
@@ -511,10 +475,10 @@ test('Worker 拒絕時顯示錯誤，不保留可重試的確認', async () => {
   } })
   const view = await mount(panel, { host })
   await view.press({ testId: `finish:${workspaces[0].id}` })
-  await view.press({ text: '下一步：確認' })
-  await view.press({ text: '確認，開始合併' })
+  await view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
+  await view.press({ text: /^確認 (Merge|Rebase) 到 / })
   assert.ok(view.find({ text: /預覽已過期/ }))
-  assert.equal(view.find({ text: '確認，開始合併' }), null)
+  assert.equal(view.find({ text: /^確認 (Merge|Rebase) 到 / }), null)
   assert.equal(calls(host, 'hub.execute').length, 1)
   await view.unmount()
 })
@@ -560,7 +524,7 @@ test('搜尋沒有結果時可清除並找回原本的工作', async () => {
   await view.unmount()
 })
 
-test('合併確認頁可返回修改並保留合併方式、目標與保留資料夾選項', async () => {
+test('合併確認頁可返回修改並保留合併方式、目標與移除資料夾選項', async () => {
   const target = { ...workspaces[1], id: 'repo::/fixture/release', path: '/fixture/release',
     branch: 'release', displayName: 'release', isMainWorktree: false, isDefaultBranch: false }
   const all = [...workspaces, target]
@@ -577,31 +541,36 @@ test('合併確認頁可返回修改並保留合併方式、目標與保留資�
   await view.press({ testId: `finish:${workspaces[0].id}` })
   await view.select({ label: '合併到' }, target.id)
   await view.select({ label: '合併方式' }, 'rebase')
+  await expandFinishOptions(view)
   await view.toggle({ label: '合成 1 個提交（Squash）' })
+  await expandFinishOptions(view)
   await view.toggle({ label: '完成後移除資料夾' })
-  await view.press({ text: '下一步：確認' })
+  await view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
   assert.equal(view.find({ label: '合併到' }), null)
   assert.equal(view.find({ label: '合併方式' }), null)
   assert.equal(view.find({ label: '4. 這次完成了什麼' }), null)
   assert.equal(view.find({ label: '完成後移除資料夾' }), null)
   assert.ok(view.find({ text: 'feature/login → release' }))
+  assert.ok(view.find({ text: '確認 Rebase 到 release' }))
   assert.equal(view.find({ text: '提交訊息：完成 feature/login（自動產生）' }), null)
   await view.toggle({ label: '執行步驟與提交訊息' })
   assert.ok(view.find({ text: '提交訊息：完成 feature/login（自動產生）' }))
   assert.equal(calls(host, 'hub.execute').length, 0)
   await view.press({ text: '返回修改' })
-  assert.equal(view.find({ text: '確認，開始合併' }), null)
+  assert.equal(view.find({ text: /^確認 (Merge|Rebase) 到 / }), null)
   assert.equal(view.valueOf({ label: '合併到' }), target.id)
   assert.equal(view.valueOf({ label: '合併方式' }), 'rebase')
+  await expandFinishOptions(view)
   assert.equal(view.valueOf({ label: '合成 1 個提交（Squash）' }), true)
-  assert.equal(view.valueOf({ label: '完成後移除資料夾' }), false)
+  await expandFinishOptions(view)
+  assert.equal(view.valueOf({ label: '完成後移除資料夾' }), true)
   await view.select({ label: '合併到' }, workspaces[1].id)
-  await view.press({ text: '下一步：確認' })
+  await view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
   assert.deepEqual(previews, [
-    { kind: 'finish', workspaceId: workspaces[0].id, targetWorkspaceId: target.id, message: '完成 feature/login', remove: false, strategy: 'rebase', squash: true },
-    { kind: 'finish', workspaceId: workspaces[0].id, targetWorkspaceId: workspaces[1].id, message: '完成 feature/login', remove: false, strategy: 'rebase', squash: true }
+    { kind: 'finish', workspaceId: workspaces[0].id, targetWorkspaceId: target.id, message: '完成 feature/login', remove: true, strategy: 'rebase', squash: true },
+    { kind: 'finish', workspaceId: workspaces[0].id, targetWorkspaceId: workspaces[1].id, message: '完成 feature/login', remove: true, strategy: 'rebase', squash: true }
   ])
-  await view.press({ text: '確認，開始合併' })
+  await view.press({ text: '確認 Rebase 到 main' })
   assert.deepEqual((calls(host, 'hub.execute')[0].params as { input: unknown }).input, { token: 'preview-2' })
   await view.unmount()
 })
@@ -617,7 +586,7 @@ test('沒有同專案合併位置時說明恢復方式，不能產生預覽', as
   assert.equal(view.find({ label: '合併到' }), null)
   assert.ok(view.find({ label: '還沒有可以合併的分支' }))
   assert.ok(view.find({ text: /請先在 Orca 開啟同專案的另一個工作資料夾/ }))
-  assert.equal(view.find({ text: '下一步：確認' })?.disabled, true)
+  assert.equal(view.find({ text: /^預覽 (Merge|Rebase) 收尾$/ })?.disabled, true)
   assert.equal(calls(host, 'hub.preview').length, 0)
   await view.unmount()
 })
@@ -632,8 +601,8 @@ test('部分完成區分尚未執行與略過，查看結果開啟回傳來源�
     ] })
   const view = await mount(panel, { host })
   await view.press({ testId: `finish:${workspaces[0].id}` })
-  await view.press({ text: '下一步：確認' })
-  await view.press({ text: '確認，開始合併' })
+  await view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
+  await view.press({ text: /^確認 (Merge|Rebase) 到 / })
   assert.equal(view.findAll({ type: 'Badge', text: '尚未執行' }).length, 2)
   assert.equal(view.findAll({ type: 'Badge', text: '略過' }).length, 1)
   assert.equal(view.find({ label: '完成了' }), null)

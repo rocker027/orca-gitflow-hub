@@ -2,7 +2,7 @@ import { read } from 'orca'
 import { assert, mockHost, mount, test } from 'orca/testing'
 import type { Execution, HubAction } from './protocol'
 import * as panel from './panel'
-import { requests, workspaces } from './panel.check.ts'
+import { expandFinishOptions, requests, workspaces } from './panel.check.ts'
 import { cancelAdvice, previewAdvice, state, writeAdvice } from './panel-state'
 
 function calls(host: ReturnType<typeof mockHost>, name: string) {
@@ -39,6 +39,7 @@ test('P1 建議狀態流程先取得預覽才可送出，回覆不改變收尾�
   assert.equal(read(state.advicePreview), null)
   assert.match(read(state.advice)?.text ?? '', /兩邊都改過 src\/login\.ts/)
   assert.equal(view.valueOf({ label: '合併方式' }), 'rebase')
+  await expandFinishOptions(view)
   assert.equal(view.valueOf({ label: '合成 1 個提交（Squash）' }), false)
   assert.equal(calls(host, 'hub.preview').length, 1)
   await view.unmount()
@@ -57,8 +58,10 @@ test('P2 取消會撤回尚未送出的請求；改合成選項會清掉舊建�
   await writeAdvice()
   const advice = read(state.advice)
   assert.ok(advice)
+  await expandFinishOptions(view)
   await view.toggle({ label: '完成後移除資料夾' })
   assert.deepEqual(read(state.advice), advice, '改清理選項不影響建議')
+  await expandFinishOptions(view)
   await view.toggle({ label: '合成 1 個提交（Squash）' })
   assert.equal(read(state.advice), null)
   await view.unmount()

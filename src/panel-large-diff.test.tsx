@@ -24,7 +24,7 @@ test('長收尾差異仍顯示確認頁並解除讀取，展開後可查看尾�
   const view = await mount(panel, { host })
   try {
     await view.press({ testId: `finish:${workspaces[0].id}` })
-    await view.press({ text: '下一步：確認' })
+    await view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
     assert.deepEqual(view.errors, [])
     assert.ok(view.find({ type: 'Card', label: '最後確認' }))
     assert.equal(view.find({ type: 'Spinner' }), null)
@@ -46,7 +46,7 @@ test('極長差異明示節錄，保留完整預覽與原確認 token', async ()
   const view = await mount(panel, { host })
   try {
     await view.press({ testId: `finish:${workspaces[0].id}` })
-    await view.press({ text: '下一步：確認' })
+    await view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
     assert.deepEqual(view.errors, [])
     assert.equal(read(state.preview)?.detail, detail)
     assert.equal(read(state.preview)?.token, 'unmodified-preview-token')
@@ -61,30 +61,35 @@ test('極長差異明示節錄，保留完整預覽與原確認 token', async ()
     assert.equal(shown.includes('FULL_PREVIEW_END'), false)
     assert.ok(codeText(view.tree()).every((entry) => entry.length <= 16_384))
     assert.deepEqual(view.errors, [])
-    await view.press({ text: '確認，開始合併' })
+    await view.press({ text: /^確認 (Merge|Rebase) 到 / })
     assert.deepEqual((calls(host, 'hub.execute')[0].params as { input: unknown }).input,
       { token: 'unmodified-preview-token' })
   } finally { await view.unmount() }
 })
 
-test('長工作目錄與暫存差異及一般提交預覽不會令整個畫面失效', async () => {
+test('長工作目錄與暫存差異不拖垮收尾頁，全部檔案與差異仍送交預檢', async () => {
   const stagedDiff = `${longDiff}\nSTAGED_DIFF_TAIL`
+  const files = [...snapshot.files, { path: 'staged.ts', index: 'M', working: ' ' }]
   const host = mockHost({ requests: { ...requests,
-    'hub.inspect': { ...snapshot, workingDiff: longDiff, stagedDiff },
-    'hub.preview': { token: 'large-commit', title: '提交預覽', summary: '確認後才會提交。', detail: longDiff }
+    'hub.inspect': { ...snapshot, files, workingDiff: longDiff, stagedDiff },
+    'hub.preview': { token: 'large-finish', title: '完成工作', summary: '確認後才會合併。', detail: longDiff }
   } })
   const view = await mount(panel, { host })
   try {
-    await view.press({ testId: `inspect:${workspaces[0].id}` })
+    await view.press({ testId: `finish:${workspaces[0].id}` })
     assert.deepEqual(view.errors, [])
-    await view.toggle({ label: 'Git 差異與逐檔提交' })
-    await view.toggle({ label: '工作目錄差異' })
-    await view.toggle({ label: '已暫存差異' })
-    assert.ok(view.find({ type: 'Code', text: /STAGED_DIFF_TAIL/ }))
-    assert.deepEqual(view.errors, [])
-    await view.type({ label: '提交訊息' }, 'feat: 驗證長差異預覽')
-    await view.press({ text: '預覽提交' })
-    assert.ok(view.find({ type: 'Card', label: '提交預覽' }))
+    assert.equal(read(state.snapshot)?.workingDiff, longDiff)
+    assert.equal(read(state.snapshot)?.stagedDiff, stagedDiff)
+    assert.ok(view.find({ text: '會先提交全部 3 個變更檔案' }))
+    assert.ok(view.find({ text: /包含已暫存、未暫存及新增檔案/ }))
+    assert.ok(view.find({ text: /若要分批提交，請先在 Orca 版本控制處理/ }))
+    assert.equal(view.find({ text: 'staged.ts' }), null)
+    assert.equal(view.find({ type: 'Code' }), null)
+    await view.toggle({ label: '收尾時提交 3 個檔案' })
+    for (const file of files) assert.ok(view.find({ text: file.path }))
+    await view.press({ text: '預覽 Merge 收尾' })
+    assert.ok(view.find({ type: 'Card', label: '最後確認' }))
+    await view.toggle({ label: '技術細節' })
     assert.ok(view.find({ type: 'Code', text: /LARGE_DIFF_TAIL/ }))
     assert.equal(view.find({ type: 'Spinner' }), null)
     assert.equal(calls(host, 'hub.execute').length, 0)
