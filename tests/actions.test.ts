@@ -19,10 +19,12 @@ test('合法提交訊息保留換行與 shell 符號，不當命令處理', () =
   assert.deepEqual(parseAction({kind:'commit',workspaceId:'a',message:'fix: $HOME\n\n`literal`'}), {kind:'commit',workspaceId:'a',message:'fix: $HOME\n\n`literal`'})
 })
 
-test('收尾只接受明確目標與布林清理選項，乾淨來源可不填提交訊息', () => {
-  const action = {kind:'finish',workspaceId:'source',targetWorkspaceId:'target',message:'',remove:true}
+test('收尾只接受明確目標、合併方式與布林選項，乾淨來源可不填提交訊息', () => {
+  const action = {kind:'finish',workspaceId:'source',targetWorkspaceId:'target',message:'',remove:true,strategy:'merge',squash:false}
   assert.deepEqual(parseAction(action), action)
-  for (const change of [{remove:'yes'}, {targetWorkspaceId:''}, {command:'git merge'}, {message:9}]) {
+  assert.deepEqual(parseAction({...action,strategy:'rebase',squash:true}), {...action,strategy:'rebase',squash:true})
+  for (const change of [{remove:'yes'}, {targetWorkspaceId:''}, {command:'git merge'}, {message:9},
+    {strategy:'squash'}, {strategy:'merge --squash'}, {strategy:undefined}, {squash:'true'}, {squash:undefined}, {mode:'force'}]) {
     assert.throws(() => parseAction({...action,...change}))
   }
 })

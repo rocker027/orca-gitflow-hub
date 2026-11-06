@@ -123,3 +123,15 @@ test('claude 只以允許清單中的工具身分執行，其他工具仍拒絕'
   assert.equal(await run('claude', ['-e', 'process.stdout.write(process.argv[1])', '$(whoami)']), '$(whoami)')
   for (const tool of ['codex', 'sh', 'node', 'bash']) await assert.rejects(run(tool as 'claude', []), /工具/)
 })
+
+// P-USER：macOS 的 claude 依 USER 讀取鑰匙圈中的登入資料；Orca Worker 的環境可能沒有 USER，缺少時要補上目前使用者。
+test('環境缺少 USER／LOGNAME 時補上目前使用者，已有值時保留', async () => {
+  const { userInfo } = await import('node:os')
+  const bare = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '' }
+  const observed = JSON.parse(await createRunner(executables, { env: bare })('claude', ['-e', 'process.stdout.write(JSON.stringify(process.env))']))
+  assert.equal(observed.USER, userInfo().username)
+  assert.equal(observed.LOGNAME, userInfo().username)
+  const kept = JSON.parse(await createRunner(executables, { env: { ...bare, USER: 'someone', LOGNAME: 'someone' } })('claude', ['-e', 'process.stdout.write(JSON.stringify(process.env))']))
+  assert.equal(kept.USER, 'someone')
+  assert.equal(kept.LOGNAME, 'someone')
+})

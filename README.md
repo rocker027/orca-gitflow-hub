@@ -4,36 +4,56 @@ Orca ADE 的工作樹管理與本機收尾面板。參考 [Worktrunk](https://wo
 
 ## 主要操作
 
-1. **開始新工作**：點首頁主按鈕，輸入工作名稱（例如「修正登入畫面」），再點「建立並開啟工作」。系統預填起點分支；需要更換分支或啟動 AI 助手時，展開「調整起點與 AI 助手」。預設不啟動 AI。
-2. **繼續工作**：首頁分開顯示進行中的工作與主要分支。從工作卡片直接開啟，或點「查看變更」確認檔案。搜尋沒有結果時，可一鍵清除。
-3. **完成並合併**：選合併位置，填寫這次完成內容，再點「下一步：確認合併內容」。不知道怎麼寫時，可點「請 AI 幫我寫」，見下方「請 AI 撰寫完成說明」。確認頁列出來源、目標、全部變更檔案及是否移除來源資料夾；「返回修改」會保留欄位。
-4. **查看結果**：成功、部分完成與尚未執行分開顯示。部分完成時先開啟工作核對結果，不直接重送。主要分支不提供「完成並合併」入口，並說明它用來接收完成的工作。
+1. **完成這個工作**：首頁最上方是 Orca 目前開啟的工作，直接點「完成這個工作」。收尾頁只需確認三個選擇，每題都有預設值：
+   1. 合併到哪個分支：預填主要分支（例如 main）。
+   2. 怎麼合併：「一般合併（推薦）」即 merge，保留原本的提交，必要時多一個合併提交。「接到最後面」即 rebase，會把提交搬到目標分支最新進度的後面，紀錄是一直線。
+   3. 要不要把提交合成一個：預設「保留每個提交（推薦）」。選「合成一個提交」（squash）時，這個工作的全部提交會先合成一個；要讓目標分支只多 1 個提交，第 2 題要選「接到最後面」。
 
-這裡的「工作」對應一個 Git 工作樹（獨立資料夾）。工作名稱也用作新分支名稱，Orca 在名稱已用過時會加數字後綴並回傳實際名稱。建立及合併採專注畫面，可隨時返回工作清單；執行期間禁止切換或重複執行。合併後預設移除來源工作資料夾，保留本機分支；可取消勾選保留資料夾。
+   不用填完成說明，也不需請 AI 代寫。有未提交變更或選了 Squash 時，自動使用 `完成 <來源分支>` 作為提交訊息，確認頁可查看。想自訂訊息時，可先在「查看變更」手動提交。
+
+   收尾頁先顯示來源與目標，再讓你選合併方式和提交紀錄。Merge 與保留提交是預設值。點「下一步：確認」後，確認頁先用一句話說明結果，再列出提醒與步驟；提醒的標題直接說會發生什麼，Git 術語收在「技術細節」。「返回修改」會保留所有選擇。按鈕不能按時，按鈕上方會說明還缺什麼。清理與 AI 風險評估放在「其他選項」，預設完成後移除工作資料夾、保留分支。
+2. **開始新工作**：點「開始新工作」，輸入工作名稱（例如「修正登入畫面」），再點「建立並開啟工作」。系統預填起點分支；需要更換分支或啟動 AI 助手時，展開「調整起點與 AI 助手」。預設不啟動 AI。
+3. **其他工作**：首頁下方列出其他進行中的工作與主要分支，可「切換過去」、「完成…」或「查看變更」。其他工作超過 5 個時才顯示搜尋框。
+4. **查看結果**：成功、部分完成與尚未執行分開顯示。部分完成時先開啟工作核對結果，不直接重送。主要分支不提供完成入口，並說明它用來接收完成的工作。
+
+## 合併方式與合成提交
+
+兩個選項可以自由組合。目標分支沒有前進時，merge 與 rebase 的結果相同，都是直接快轉。
+
+| 選擇 | 目標分支會得到 | 這個工作的分支 |
+| --- | --- | --- |
+| 一般合併＋保留每個提交 | 原本的提交，分歧時再加 1 個合併提交 | 不改寫 |
+| 一般合併＋合成一個 | 1 個合成後的提交，分歧時再加 1 個合併提交 | 改寫成 1 個提交 |
+| rebase＋保留每個提交 | 原本的提交重新接在最後面，紀錄是一直線 | 改寫（提交編號改變） |
+| rebase＋合成一個 | 只多 1 個提交，接在最後面 | 改寫成 1 個提交 |
+
+- **順序**：提交未提交的變更 → 預檢衝突 → 合成 → rebase → 更新目標 → 視選項安全移除資料夾 → 切換到目標。
+- **衝突**：每一步改寫前，都先用 `git merge-tree` 在不碰任何分支的情況下模擬。有衝突就停止，並列出兩邊都改過的檔案。目標分支不會被修改，也不會合成或 rebase；若有未提交變更，提交步驟已經完成。沒有未提交變更時，預覽階段就會擋下。rebase 有衝突但一般合併可行時，訊息會建議改選一般合併。
+- **合成（squash）**：以 `git commit-tree` 建立一個提交，tree 與原本最新提交相同，父提交是兩邊的共同起點。接著用 `git update-ref` 比對舊值後更新分支，工作資料夾內容不變。只有 1 個提交時略過。合成提交不執行 commit hooks，原本的提交在建立時已經執行過。`commit.gpgSign=true` 時會加 `-S` 簽章。歷史有多個共同起點時拒絕合成。
+- **rebase**：只在目標分支已前進時執行，固定參數為 `--reapply-cherry-picks --no-autosquash --no-autostash --no-update-refs --no-rebase-merges`，結果必須與模擬相同。這個工作含合併提交且沒有選合成時拒絕，請改用一般合併或合成。`git rebase` 沒有保護被忽略檔案的選項，所以只要被 Git 忽略的本機檔案（例如 `.env`）或資料夾會被 rebase 寫到，就在開始前拒絕。比對時不分大小寫（`core.ignoreCase=true` 時），也涵蓋檔案取代資料夾的情況。rebase 中途失敗時，外掛會 `git rebase --abort` 並核對 HEAD、分支與已追蹤內容都已還原；無法確認時標示 UNKNOWN 並保留現場。目標分支一律只用 `--ff-only` 前進。
+- **改寫提醒**：合成或 rebase 會改變這個工作的提交編號，原本的提交仍可從 `git reflog` 找回。若其中有提交已在遠端追蹤分支，確認頁會提醒之後需要 force push。外掛不會自動 push。
+
+這裡的「工作」對應一個 Git 工作樹（獨立資料夾）。工作名稱也用作新分支名稱，Orca 在名稱已用過時會加數字後綴並回傳實際名稱。建立及收尾採專注畫面，可隨時返回工作清單；執行期間禁止切換或重複執行。完成後預設移除來源工作資料夾，保留本機分支；可取消勾選保留資料夾。
 
 面板會跟著 Orca 目前開啟的工作樹自動更新，不必按「重新整理」。切換到另一個工作樹時，尚未送出的建立、合併與 PR 欄位會清空，舊的確認頁也會失效，避免把輸入帶到錯的工作。只開關或更名終端不會清空欄位。建立或合併執行中切換時，會等操作完成並保留結果，再更新到新的工作樹。如果建立或合併自動開啟了結果所在的工作樹，切換事件晚到時仍會保留逐步結果。操作完成後改切到其他工作樹時，結果會清除。
 
-## 請 AI 撰寫完成說明
+## 請 AI 評估合併風險
 
-在「完成並合併」頁點「請 AI 幫我寫」，面板會先說明要傳送的內容，可展開查看全文。按「確認傳送給 Claude」後，大約 10–60 秒，寫好的說明會取代「這次完成了什麼」的內容，你可以再修改。取消、修改欄位或切換工作樹，都會撤回尚未確認的傳送。
+收尾頁展開「其他選項」後有「（可選）請 AI 評估合併風險」，不按也不影響收尾。面板會先說明要傳送的內容，可展開查看全文。按「確認傳送給 Claude」後，大約 10–60 秒會顯示「AI 合併建議：風險低／中／高」與 2 到 4 點原因和建議。取消、修改欄位或切換工作樹，都會撤回尚未確認的傳送。
 
-- **會傳送的內容**：這次未提交的變更，包括 staged、unstaged 與新檔案的文字內容，會傳給 Claude，也就是 Anthropic 的 AI 服務。內容超過 10 萬字時只傳前面的部分。新檔案每個最多傳 8000 位元組，二進位檔只列出檔名。`@` 會改成全形「＠」，避免被 Claude Code 當成檔案提及去讀取。
-- **機密檢查**：下列情況會直接停止，不會傳送。
-  - 變更涉及 `.env`、私鑰、`.npmrc`、`.netrc`、`.git-credentials`、`*.tfvars`、`kubeconfig` 等敏感檔，包括已刪除或改名的檔案。
-  - 變更內容（包括刪除的行）含有私鑰，或 AWS、GitLab、GitHub、Anthropic、Stripe、Slack、Google、npm 的金鑰格式。
+- **只供參考**：建議不會改變你的選擇，也不會自動合併。改了目標、合併方式或要不要合成一個提交，舊建議會清掉，因為建議是針對當時的選擇。之後若又修改了檔案，請重新產生。Claude 回覆的第一行不是規定的「風險：低／中／高」時，標為「無法判斷風險」，不從內文猜測。
+- **Git 檢查的事實**：結果下方直接顯示 Git 算出的「可能有衝突／可以自動合併」與兩邊都改過的檔案。變更內容裡的文字可能誘導 AI 說「風險低」，所以顯示的等級至少符合事實：預檢可能有衝突時至少「高」，兩邊改到同一檔時至少「中」，並標示「依 Git 檢查調高」。風險高用警告色，紅色只用在真正的失敗。
+- **會傳送的內容**：目標分支名稱、你目前的選擇、雙方領先的提交數、目標分支在共同起點後改過的檔名（只有檔名，不含內容）、兩邊都改過的檔案、Git 預檢結果（只看已提交內容），以及這個工作相對共同起點的已提交變更與未提交變更。內容超過 10 萬字時截斷，新檔案每個最多 8000 位元組，二進位檔只列檔名。`@` 轉成全形以避免檔案提及；已提交變更超過程序輸出上限時改送檔案統計。
+- **機密檢查**：檢查 `.env`、私鑰等敏感檔名與常見金鑰格式，涵蓋已提交與未提交變更，包括刪掉的行與敏感檔。這只是常見格式的檢查，送出前請展開確認。
+- **Claude 的權限**：以本機 Claude CLI 固定限制參數執行，沒有工具或 MCP，在用完即刪的暫存目錄執行，不持有儲存庫鎖。需要本機已安裝並登入 Claude。預覽後這個工作的內容或目標分支變了，就拒絕送出，請重新產生。
 
-  這只是常見格式的檢查，無法保證沒有機密，送出前請展開確認內容。
-- **Claude 的權限**：Worker 在背景以固定參數執行本機的 `claude` 命令列（`-p --output-format json --restricted --strict-mcp-config --disable-slash-commands --tools ""` 等）。Claude 沒有任何工具或 MCP，也不讀你的 Claude Code 設定檔與 hooks，只能回傳文字。執行目錄是用完即刪的暫存資料夾，所以不會讀到專案的 `CLAUDE.md`。個人層級的 `~/.claude/CLAUDE.md` 可能仍會載入，這一點尚未實測。撰寫期間不會鎖住儲存庫，面板逾時或關閉時會停止 `claude`。
-- **前提**：本機要已安裝並登入 Claude Code（`claude`）。未登入或找不到命令時，面板會顯示原因，並提示先在終端執行 `claude` 確認登入。
-- **只支援 Claude**：Codex 的唯讀沙箱仍能讀取整個磁碟，無法用同樣方式關閉，所以暫不提供。
-
-合併保留既有提交歷史：可快轉則快轉，分歧時建立合併提交。未自動 squash 或 rebase。收尾只更新本機，不 Push、不建立 PR。無新變更時沿用既有提交。
+收尾只更新本機，不 Push、不建立 PR。無新變更時沿用既有提交。預設保留提交歷史，rebase 與合成只在使用者選擇時執行。
 
 Git Diff、勾選暫存、手動提交、AI 提交訊息與 GitHub Draft PR 保留在工作「查看變更」的進階操作中。GitHub PR 審查與遠端合併仍在 GitHub 完成。AI Code Review pipeline 與批次管理尚未實作。
 
 本機收尾功能的驗證範圍與實際結果見[驗證紀錄](/Users/devrune/Documents/code/ai-sdlc-hub/projects/orca-gitflow-hub/initiatives/AISDLC-2026-1105-worktree-finish/verification.md)。真實 Git 收尾使用隔離儲存庫；fixture 通過不等於使用者專案或 GitHub 寫入已驗證。
 
-本次介面調整見[新手導向介面驗證紀錄](/Users/devrune/Documents/code/ai-sdlc-hub/projects/orca-gitflow-hub/initiatives/AISDLC-2026-1105-guided-ui/verification.md)（local-only）。面板測試驗證操作與狀態，不代表已完成真人可用性、鍵盤或讀屏測試。
+收尾優先介面與合併方式見[驗證紀錄](/Users/devrune/Documents/code/ai-sdlc-hub/projects/orca-gitflow-hub/initiatives/AISDLC-2026-1105-finish-strategy/verification.md)（local-only）。面板測試驗證操作與狀態，不代表已完成真人可用性、鍵盤或讀屏測試。
 
 ## 環境與 GitHub 登入
 
@@ -96,10 +116,11 @@ Agent 權限由 Orca 設定控制；限定任務的提示詞沒有替 Agent 新�
 - 僅支援本機工作區與同儲存庫 GitHub PR，拒絕 fork PR。
 - `origin` 接受無內嵌憑證的 HTTPS、SSH 或 SCP URL。Git 展開後的 fetch／push 目的地須可核對；目前 Push 要求兩者 URL 一致。
 - 不自動 fetch、force push、reset、刪分支、發布審查留言或遠端合併。未追蹤檔案會列出，但暫存前不會出現在一般 Git Diff。
-- 清理拒絕主要工作區與預設分支、dirty／untracked／ignored 檔案、submodule、鎖定、進行中的 Git 操作，以及無法證明已合併的 HEAD。
+- 清理拒絕主要工作區與預設分支、dirty／untracked／ignored 檔案、submodule、鎖定、進行中的 Git 操作，以及無法證明已合併的 HEAD。來源有 ignored 檔（例如 `.env`、`node_modules`）且選了移除資料夾時，會在預覽階段先提示取消移除，尚不提交或合併。
 - 收尾前需確認來源與目標都沒有存活或狀態不明的終端／Agent。已完成的 Agent 歷史可保留；閒置 shell 仍需關閉。清理完成保留本機分支。
-- 本機收尾要求目標乾淨，來源為功能工作樹，且雙方都已登錄 Orca。不支援 detached HEAD、submodule、進行中的 Git 操作、未知鎖或隱藏變更的 index flags／稀疏 checkout。Git 需支援 `merge-tree --write-tree`。
-- 衝突預檢失敗時，來源可能已提交，目標尚未合併。實際 merge／hook 失敗則可能已寫入目標，顯示 UNKNOWN 並保留現場，不自動 rollback 或重送。
+- 本機收尾要求目標乾淨，來源為功能工作樹，且雙方都已登錄 Orca。不支援 detached HEAD、submodule、進行中的 Git 操作、未知鎖或隱藏變更的 index flags／稀疏 checkout。Git 需支援 `merge-tree --write-tree`；rebase 與合成另需 `--merge-base` 並接受 tree 參數（Git 2.40 起提供 `--merge-base`，本機只在 2.50.1 實測）。舊版 Git 會在預檢失敗並停止，訊息可能顯示為衝突。
+- 衝突預檢失敗時，來源可能已提交，目標尚未合併，也不會合成或 rebase。實際 merge／hook 失敗則可能已寫入目標，顯示 UNKNOWN 並保留現場，不自動 rollback 或重送。唯一的自動還原是外掛自己啟動的 rebase 失敗時執行 `git rebase --abort`。
+- 目標只能是 Orca 已登錄、已 checkout 該分支的工作樹，不支援未 checkout 的任意本機分支。
 - PR 建立逾時後只查詢，不重送 POST。結果未知時先在 GitHub 查明。PR 已建立但 Orca 關聯失敗時，可重新預覽以復用 PR 並補關聯。
 - 分頁超限會回報無法完整讀取。Checks、留言或審查資訊無權限時保留警告，不顯示為通過。
 - PR 使用 GitHub 的 `draft: true` 建立，草稿不是標題文字。`mergeable: null` 代表尚未取得可合併性結果；checks 全綠或 reviews 已核准也不取代 GitHub 分支保護與權限規則。
@@ -116,6 +137,6 @@ Agent 權限由 Orca 設定控制；限定任務的提示詞沒有替 Agent 新�
 外掛鎖只協調 Hub 寫入；外部 Agent 或使用者仍可能同時操作 Git。
 
 - [架構與失敗處理](docs/architecture.md)、[收尾驗證矩陣](docs/finish-safety-matrix.md)、[GitHub／基礎操作安全矩陣](docs/security-matrix.md)
-- 現行計畫：[AISDLC-2026-1105-worktree-finish](/Users/devrune/Documents/code/ai-sdlc-hub/projects/orca-gitflow-hub/initiatives/AISDLC-2026-1105-worktree-finish/plan.md)（local-only）。
+- 現行計畫：[AISDLC-2026-1105-finish-strategy](/Users/devrune/Documents/code/ai-sdlc-hub/projects/orca-gitflow-hub/initiatives/AISDLC-2026-1105-finish-strategy/plan.md)（local-only），取代 [AISDLC-2026-1105-worktree-finish](/Users/devrune/Documents/code/ai-sdlc-hub/projects/orca-gitflow-hub/initiatives/AISDLC-2026-1105-worktree-finish/plan.md) 的「不自動 squash/rebase」。
 - Worktrunk 參考：[list](https://worktrunk.dev/list/)、[switch](https://worktrunk.dev/switch/)、[merge](https://worktrunk.dev/merge/)。本專案沿用 Native Git 與 Orca，不需要安裝 Worktrunk。
 - Orca 官方依據固定於 [`318f5432931cb0800414740832123ef04c186dc5`](https://github.com/stablyai/orca/tree/318f5432931cb0800414740832123ef04c186dc5)：[Plugin Authoring](https://github.com/stablyai/orca/blob/318f5432931cb0800414740832123ef04c186dc5/docs/reference/plugin-authoring.md)、[CLI](https://github.com/stablyai/orca/blob/318f5432931cb0800414740832123ef04c186dc5/docs/site/content/docs/cli/reference.mdx)。

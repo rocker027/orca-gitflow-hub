@@ -99,7 +99,7 @@ test('已完成的 Agent 歷史可收尾，活動中子 Agent 與未知狀態仍
   await serviceFor([{state:'done',children:[]}]).assertIdle(base)
   await serviceFor([{state:'done',mainAgent:{state:'done'},children:[{state:'done'}]}]).assertIdle(base)
   for (const agents of [[{state:'done',children:[{state:'working'}]}],[{state:'done',mainAgent:{state:'working'}}],[{state:'done',children:[{}]}],[{state:'done',children:'unknown'}],[{}]]) {
-    await assert.rejects(serviceFor(agents).assertIdle(base), /Agent|未知|活動/)
+    await assert.rejects(serviceFor(agents).assertIdle(base), /AI 助手|Agent|未知|活動/)
   }
 })
 

@@ -56,13 +56,20 @@ export function parseAction(value: unknown): HubAction {
       fields(input, [])
       return { kind: 'push', workspaceId: id }
     case 'finish':
-      fields(input, ['targetWorkspaceId', 'message', 'remove'])
+      fields(input, ['targetWorkspaceId', 'message', 'remove', 'strategy', 'squash'])
       if (typeof input.remove !== 'boolean') throw new Error('請明確選擇是否清理工作樹。')
+      if (input.strategy !== 'merge' && input.strategy !== 'rebase') throw new Error('請選擇合併方式（merge 或 rebase）。')
+      if (typeof input.squash !== 'boolean') throw new Error('請明確選擇是否合成一個提交。')
       return { kind: 'finish', workspaceId: id, targetWorkspaceId: workspaceId(input.targetWorkspaceId),
-        message: textField(input.message, '提交訊息', 8000, true), remove: input.remove }
+        message: textField(input.message, '提交訊息', 8000, true), remove: input.remove, strategy: input.strategy, squash: input.squash }
     case 'finish-summary':
       fields(input, [])
       return { kind: 'finish-summary', workspaceId: id }
+    case 'finish-advice':
+      fields(input, ['targetWorkspaceId', 'strategy', 'squash'])
+      if (input.strategy !== 'merge' && input.strategy !== 'rebase') throw new Error('請選擇合併方式（merge 或 rebase）。')
+      if (typeof input.squash !== 'boolean') throw new Error('請明確選擇是否合成一個提交。')
+      return { kind: 'finish-advice', workspaceId: id, targetWorkspaceId: workspaceId(input.targetWorkspaceId), strategy: input.strategy, squash: input.squash }
     default: throw new Error('不支援這個操作。')
   }
 }

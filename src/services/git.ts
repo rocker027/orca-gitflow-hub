@@ -13,6 +13,9 @@ const MAX_SUMMARY_MATERIAL = 100_000
 const MAX_SUMMARY_NEW_FILE = 8_000
 
 export interface SummaryMaterial { fingerprint: string; files: string[]; text: string; truncated: boolean }
+/** Git 算出的確定事實；面板直接顯示，不只交給 AI 轉述，避免被資料裡的文字帶偏。 */
+export interface AdviceFacts { conflict: boolean; overlap: string[] }
+export interface AdviceMaterial extends SummaryMaterial { facts: AdviceFacts }
 
 function lines(value: string): string[] {
   return value.split('\n').filter(Boolean)
@@ -182,6 +185,12 @@ export class GitService {
     if (reasons.length) throw new Error(`工作樹無法安全收尾：${reasons.join('；')}`)
   }
 
+  /** 收尾預覽只查會阻擋清理的本機檔案，不讀取其內容或要求分支已經合併。 */
+  async hasIgnoredFiles(cwd: string): Promise<boolean> {
+    await this.root(cwd)
+    return Boolean(await this.git(cwd, ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory', '--no-empty-directory', '-z']))
+  }
+
   async snapshot(cwd: string): Promise<GitSnapshot> {
     await this.root(cwd)
     const head = await this.head(cwd)
@@ -262,6 +271,47 @@ export class GitService {
     const truncated = full.length > MAX_SUMMARY_MATERIAL
     const text = truncated ? `${full.slice(0, MAX_SUMMARY_MATERIAL - 40)}\n\n（內容過長，以下已截斷）` : full
     return { fingerprint: snapshot.fingerprint, files, text, truncated }
+  }
+
+  /**
+   * 收集「AI 合併建議」要傳給 Claude 的資料：這個工作相對共同起點的已提交與未提交變更、
+   * 目標分支改過的檔名（不含內容）、兩邊都改過的檔案與 Git 預檢結果。含機密或敏感檔時拒絕，
+   * 檢查範圍包括已提交變更中被刪除的行與檔案。
+   * @param choice 使用者目前選的合併方式，讓 AI 針對這個選擇評估。
+   */
+  async adviceMaterial(cwd: string, targetHead: string, targetBranch: string, choice: string): Promise<AdviceMaterial> {
+    const snapshot = await this.previewAllChanges(cwd, 'AI 合併建議')
+    let base: string
+    try { base = (await this.git(cwd, ['merge-base', targetHead, snapshot.head])).trim() } catch { throw new Error('這個工作和目標分支沒有共同起點，無法評估') }
+    const names = async (args: readonly string[]) => (await this.git(cwd, args)).split('\0').filter(Boolean)
+    const committed = await names(['diff', '--name-only', '-z', '--no-renames', base, snapshot.head])
+    if (!committed.length && !snapshot.files.length) throw new Error('沒有要合併的內容，不需要評估')
+    const targetChanged = await names(['diff', '--name-only', '-z', '--no-renames', base, targetHead])
+    const mine = new Set([...committed, ...snapshot.files.map((file) => file.path)])
+    const overlap = targetChanged.filter((path) => mine.has(path))
+    const [behind, ahead] = (await this.git(cwd, ['rev-list', '--left-right', '--count', `${targetHead}...${snapshot.head}`])).trim().split(/\s+/)
+    const conflict = await this.git(cwd, ['merge-tree', '--write-tree', '--no-messages', targetHead, snapshot.head]).then(() => false, () => true)
+    const precheck = conflict ? '可能有衝突（只看已提交的內容）' : '可以自動合併（只看已提交的內容）'
+    // 已提交的 diff 可能超過程序輸出上限；改送統計，讓大型分支仍能評估。
+    let oversized = false
+    const committedDiff = await this.git(cwd, ['diff', ...SUMMARY_DIFF_ARGS, base, snapshot.head]).catch(async () => {
+      oversized = true
+      return `（變更太大，只傳送統計）\n${await this.git(cwd, ['diff', '--stat=200', '--no-color', '--no-ext-diff', '--no-textconv', base, snapshot.head])}`
+    })
+    const listed = (paths: string[]) => paths.length ? paths.slice(0, 200).join('、') + (paths.length > 200 ? ` 等 ${paths.length} 個` : '') : '無'
+    const parts = [`目標分支：${targetBranch}`, `這個工作：${snapshot.branch}`, `選擇：${choice}`,
+      `目標分支領先 ${behind} 個提交；這個工作領先 ${ahead} 個提交；未提交的檔案 ${snapshot.files.length} 個（完成時會先一起提交）。`,
+      `目標分支在共同起點後改過的檔案（只列檔名）：${listed(targetChanged)}`, `兩邊都改過的檔案：${listed(overlap)}`, `Git 預檢：${precheck}`,
+      `這個工作已提交的變更：\n${committedDiff}`,
+      await this.git(cwd, ['diff', '--cached', ...SUMMARY_DIFF_ARGS]), await this.git(cwd, ['diff', ...SUMMARY_DIFF_ARGS])]
+    for (const file of snapshot.files.filter((entry) => entry.index === '?')) parts.push(await newFileText(cwd, file.path))
+    const full = parts.filter((part) => part.trim()).join('\n\n')
+    const changed: ChangedFile[] = [...snapshot.files, ...committed.map((path) => ({ path, index: 'M', working: ' ' }))]
+    checkSummarySecrets(changed, full)
+    if ((await this.snapshot(cwd)).fingerprint !== snapshot.fingerprint) throw new Error('讀取期間變更已改變，請再試一次')
+    const truncated = oversized || full.length > MAX_SUMMARY_MATERIAL
+    const text = full.length > MAX_SUMMARY_MATERIAL ? `${full.slice(0, MAX_SUMMARY_MATERIAL - 40)}\n\n（內容過長，以下已截斷）` : full
+    return { fingerprint: snapshot.fingerprint, files: [...mine], text, truncated, facts: { conflict, overlap } }
   }
 
   async previewCommit(cwd: string, message: string): Promise<CommitPreview> {

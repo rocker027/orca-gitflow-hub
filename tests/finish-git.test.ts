@@ -1,51 +1,10 @@
 import assert from 'node:assert/strict'
-import { spawn } from 'node:child_process'
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import type { Run } from '../src/contracts'
 import { FinishGitService, type FinishPlan } from '../src/services/finish'
-import { GitService } from '../src/services/git'
-
-const run: Run = async (tool, args, options = {}) => new Promise((resolve, reject) => {
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')))
-  const child = spawn(tool, [...args], {
-    cwd: options.cwd, shell: false,
-    env: { ...env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_TERMINAL_PROMPT: '0' },
-  })
-  let stdout = ''
-  let stderr = ''
-  child.stdout.on('data', (chunk) => { stdout += String(chunk) })
-  child.stderr.on('data', (chunk) => { stderr += String(chunk) })
-  child.on('error', reject)
-  child.on('close', (code) => code === 0 ? resolve(stdout) : reject(new Error(`${stderr}\n${stdout}`)))
-  child.stdin.end(options.input)
-})
-
-async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'gitflow-finish-'))
-  const target = join(root, 'main')
-  const source = join(root, 'source')
-  await mkdir(target)
-  const git = (cwd: string, ...args: string[]) => run('git', args, { cwd })
-  await git(target, 'init', '-b', 'main')
-  await git(target, 'config', 'user.name', 'Fixture')
-  await git(target, 'config', 'user.email', 'fixture@example.invalid')
-  await writeFile(join(target, 'base.txt'), 'initial\n')
-  await writeFile(join(target, '.gitignore'), 'ignored.txt\n')
-  await git(target, 'add', '--', 'base.txt', '.gitignore')
-  await git(target, 'commit', '-m', 'initial')
-  await git(target, 'worktree', 'add', '-b', 'feature/test', source)
-  return { root, source, target, git, service: new FinishGitService(run), snapshots: new GitService(run) }
-}
-
-async function save(f: Awaited<ReturnType<typeof fixture>>, cwd: string, file: string, value: string) {
-  await writeFile(join(cwd, file), value)
-  await f.git(cwd, '--literal-pathspecs', 'add', '--', file)
-  await f.git(cwd, 'commit', '-m', `change ${file}`)
-  return (await f.git(cwd, 'rev-parse', 'HEAD')).trim()
-}
+import { fixture, run, save } from './git-fixture'
 
 test('乾淨且已合併的來源可免提交訊息收尾，不新增提交', async () => {
   const f = await fixture()
@@ -217,7 +176,8 @@ test('merge-tree 執行期間目標漂移時，再次核對並拒絕真實合併
       return output
     }
     const service = new FinishGitService(guardedRun)
-    const plan = await service.prepare(f.source, f.target, '')
+    // 預覽也會跑 merge-tree 預檢；用一般服務建立計畫，只在合併時注入漂移。
+    const plan = await f.service.prepare(f.source, f.target, '')
     await assert.rejects(service.merge(f.source, f.target, plan, head), /目標|過期|變更/)
     assert.equal(injected, true)
     assert.equal((await f.git(f.target, 'rev-parse', 'HEAD')).trim(), plan.target.head)
@@ -395,7 +355,8 @@ test('merge-tree 不支援時不退回真實 merge，目標保持未動', async 
       return run(tool, args, options)
     }
     const service = new FinishGitService(failingRun)
-    const plan = await service.prepare(f.source, f.target, '')
+    await assert.rejects(service.prepare(f.source, f.target, ''), /預檢失敗.*merge-tree/)
+    const plan = await f.service.prepare(f.source, f.target, '')
     await assert.rejects(service.merge(f.source, f.target, plan, head), /預檢失敗.*merge-tree/)
     assert.equal(merges, 0)
     assert.equal((await f.snapshots.snapshot(f.target)).fingerprint, plan.target.fingerprint)

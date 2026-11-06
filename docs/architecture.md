@@ -13,7 +13,7 @@ GitFlow Hub 以 Orca TSX 面板與可信 Worker 管理工作樹及本機收尾�
 | Orca 服務 | `src/services/orca.ts` | Worktree、Agent、PR 關聯；Worktree 生命週期由 Orca 唯一管理 |
 | Git 服務 | `src/services/git.ts` | 狀態、Diff、內容指紋、暫存、提交、Push 與清理檢查 |
 | 清單摘要 | `src/services/overview.ts` | 輕量狀態、ahead／behind、最後提交；錯誤保留 UNKNOWN |
-| 本機收尾 | `src/finish-workflow.ts`、`src/services/finish.ts` | 版本綁定、提交、合併、開啟與清理的逐步結果 |
+| 本機收尾 | `src/finish-workflow.ts`、`src/services/finish.ts`、`src/finish-text.ts` | 版本綁定、提交、合成、rebase、合併、開啟與清理的逐步結果；確認頁白話文字 |
 | GitHub 服務 | `src/services/github.ts` | Host／owner／repo、Draft PR、分頁查詢與審查資訊 |
 | 程序執行器 | `src/services/process.ts` | `shell: false`、argv／stdin、逾時、輸出上限與取消 |
 
@@ -37,15 +37,19 @@ Worker 中斷可能留下 `running` 紀錄或鎖。重新啟動不代表先前�
 
 `hub.dashboard` 預設採用 Orca `isActive` 所在專案，僅對所選專案查詢輕量摘要。目標預設選登錄的預設分支工作樹，再退至主要工作樹。摘要無完整 Diff；檢視／收尾才讀詳細 snapshot。錯誤不當作乾淨，非同步舊回覆不覆蓋新選擇。
 
-建立表單單擊「建立並開啟」，內部仍依序 preview／execute，操作期間停用重複送出。Orca 管理分支名稱後綴及完整工作樹 ID，Hub 開啟實際回傳 ID。收尾則保留獨立預覽與確認。
+建立表單單擊「建立並開啟」，內部仍依序 preview／execute，操作期間停用重複送出。Orca 管理分支名稱後綴及完整工作樹 ID，Hub 開啟實際回傳 ID。收尾則保留獨立預覽與確認。表單只選目標、合併方式和是否合成提交。提交訊息由來源分支自動產生，確認頁可查看；清理與選用 AI 風險評估放在「其他選項」。
 
-1. 核對來源為功能工作樹、目標屬同 Orca repo 與 canonical Git common dir，雙方沒有活動中或未知程序、Git 操作或鎖。目標須乾淨。
+1. 核對來源為功能工作樹、目標屬同 Orca repo 與 canonical Git common dir，雙方沒有活動中或未知程序、Git 操作或鎖。目標須乾淨。若選擇移除資料夾且來源已有 ignored 檔，預覽先拒絕並提示取消移除，避免合併後才發現不能清理。
 2. 預覽列出來源全部變更；固定雙方身分、HEAD、內容、提交訊息與清理選項。參數與計畫可序列化保存於 token。
 3. 鎖定共用 repo 後重新驗證，僅暫存列出的合法路徑，再提交。驗證新提交的 parent 與 tree，hook 改寫不視為預覽內容。
-4. 再核對雙方狀態，以 `merge-tree --write-tree` 預檢，合併固定來源 SHA。可快轉則快轉，分歧則建立合併提交，不自動 squash／rebase。合併後驗證雙方 ancestry 與 tree。
-5. 開啟目標工作樹。若選擇清理，再核對雙方版本、來源無變更／ignored 檔案、來源 SHA 已合入及活動狀態。由 Orca 移除，保留分支；核對 Orca 清單與實際目錄均已移除。
+4. 依使用者選擇整理來源。每一步改寫前都以 `merge-tree --write-tree` 模擬，衝突就停止，不改寫來源也不碰目標。
+   - 合成（squash）：`commit-tree <來源 tree> -p <共同起點>` 建立單一提交，`update-ref` 比對舊值後更新來源分支；tree 不變，來源工作樹仍乾淨。不執行 commit hooks，`commit.gpgSign=true` 時加 `-S`。
+   - rebase：目標已前進、且來源還有未併入的提交才執行。以 `merge-tree --merge-base` 逐提交串接模擬，被忽略的本機檔案會被寫到時拒絕，再以固定參數執行 `git rebase`，結果 tree 必須等於模擬。失敗時由 Hub abort 自己的 rebase 並核對已還原，無法核對才標 UNKNOWN。
+5. 再核對雙方狀態，合併固定來源 SHA。merge 可快轉則快轉、分歧則建立合併提交；rebase 只用 `--ff-only`。合併後驗證雙方 ancestry 與 tree。四種組合結束時，來源 HEAD 都是目標的祖先，清理檢查不需放寬。
+6. 若選擇清理，再核對雙方版本、來源無變更／ignored 檔案、來源 SHA 已合入及活動狀態。由 Orca 移除，保留分支；核對 Orca 清單與實際目錄均已移除。
+7. 最後開啟目標工作樹，避免 Orca 自動開啟的終端阻擋前一步清理。若切換失敗，結果仍保留已合併、已清理的證據，提供目標工作樹供再次開啟。
 
-每一步保留 `done`／`skipped`／`failed`。中途失敗以 `needs_attention` 回覆已完成步驟，舊 token 不重做。命令失敗但可能已寫入時標示 UNKNOWN，保留現場。GitHub API 不參與本機收尾。完整邊界見 [F1–F12 矩陣](finish-safety-matrix.md)。
+結果只列本次相關步驟（`commit`、`squash`、`rebase`、`merge`、`cleanup`、`open`），每一步保留 `done`／`skipped`／`failed`。中途失敗以 `needs_attention` 回覆已完成步驟，舊 token 不重做。命令失敗但可能已寫入時標示 UNKNOWN，保留現場。GitHub API 不參與本機收尾。完整邊界見 [F1–F18 矩陣](finish-safety-matrix.md)。
 
 ## Git 與 AI 草稿
 
@@ -114,5 +118,5 @@ Orca 活動資料必須完整。任何存活終端、無法確認的終端、PTY
 
 - Orca 固定來源：[`318f5432931cb0800414740832123ef04c186dc5`](https://github.com/stablyai/orca/tree/318f5432931cb0800414740832123ef04c186dc5)，[Plugin Authoring](https://github.com/stablyai/orca/blob/318f5432931cb0800414740832123ef04c186dc5/docs/reference/plugin-authoring.md)、[Host API](https://github.com/stablyai/orca/blob/318f5432931cb0800414740832123ef04c186dc5/docs/reference/plugin-host-api.md)。
 - GitHub 官方文件於 2026-11-05 查閱：[PR REST API](https://docs.github.com/en/rest/pulls/pulls)、[Checks](https://docs.github.com/en/rest/checks/runs)、[Commit statuses](https://docs.github.com/en/rest/commits/statuses)、[PR GraphQL](https://docs.github.com/en/graphql/reference/objects#pullrequest)、[GitHub CLI](https://cli.github.com/manual/gh_pr_view)。文件為浮動版本，GitHub Enterprise Server 不在本次支援範圍。
-- 唯一現行計畫：[AISDLC-2026-1105-worktree-finish](/Users/devrune/Documents/code/ai-sdlc-hub/projects/orca-gitflow-hub/initiatives/AISDLC-2026-1105-worktree-finish/plan.md)（local-only）。
+- 現行計畫：[AISDLC-2026-1105-finish-strategy](/Users/devrune/Documents/code/ai-sdlc-hub/projects/orca-gitflow-hub/initiatives/AISDLC-2026-1105-finish-strategy/plan.md)（local-only），沿用 [AISDLC-2026-1105-worktree-finish](/Users/devrune/Documents/code/ai-sdlc-hub/projects/orca-gitflow-hub/initiatives/AISDLC-2026-1105-worktree-finish/plan.md) 的收尾契約。
 - [安全矩陣](security-matrix.md) 定義對抗案例；P2／P3 不在此 MVP 實作範圍。

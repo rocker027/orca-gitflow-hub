@@ -21,6 +21,8 @@ export interface Operation {
   finish?: FinishContext
   /** 使用者確認要傳給 AI 的變更內容；執行時只送這份。 */
   summary?: string
+  /** 合併建議預覽時 Git 算出的事實，回覆時用來顯示與校正等級。 */
+  adviceFacts?: { conflict: boolean; overlap: string[] }
 }
 export const previewLifetimeMs = 10 * 60 * 1000
 export const stateKey = (id: string) => createHash('sha256').update(id).digest('hex')

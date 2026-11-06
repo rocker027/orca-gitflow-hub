@@ -1,6 +1,6 @@
 import { atom, on, plugin, read, set, type Atom, type PanelContext } from 'orca'
 import type { GitSnapshot, PullRequest, PrDetails, Workspace } from './contracts'
-import type { Dashboard, Execution, HubAction, HubList, Preview } from './protocol'
+import type { Dashboard, Execution, FinishStrategy, HubAction, HubList, Preview } from './protocol'
 
 export const state = {
   list: atom<HubList>({ workspaces: [], warnings: [] }),
@@ -26,17 +26,21 @@ export const state = {
   agent: atom('codex'),
   prompt: atom(''),
   message: atom(''),
-  finishMessage: atom(''),
   finishTargetId: atom(''),
+  /** 預設一般合併、保留每個提交；改寫歷史只在使用者明確選擇時發生。 */
+  finishStrategy: atom<FinishStrategy>('merge'),
+  finishSquash: atom(false),
   removeAfterFinish: atom(true),
   targetBranch: atom(''),
   prTitle: atom(''),
   prDescription: atom(''),
   prs: atom<PullRequest[] | null>(null),
   pr: atom<PrDetails | null>(null),
-  /** 等待使用者確認是否把變更傳給 Claude 的預覽；確認前不會傳送。 */
-  summaryPreview: atom<Preview | null>(null),
-  summaryWriting: atom(false)
+  /** 等待使用者確認是否把變更傳給 Claude 評估合併風險；確認前不會傳送。 */
+  advicePreview: atom<Preview | null>(null),
+  adviceWriting: atom(false),
+  /** Claude 的合併建議，只供參考；改目標、合併方式或合成選項時清掉，因為建議是針對當時的選擇。 */
+  advice: atom<NonNullable<Execution['advice']> | null>(null)
 }
 
 let requestSequence = 0
@@ -83,6 +87,16 @@ export function projectWorkspaces(): Workspace[] {
   return read(state.list).workspaces.filter((workspace) => workspace.repoId === read(state.repoId))
 }
 
+/** Orca 目前開啟、且屬於這個專案的工作樹；首頁把它當作「目前的工作」。 */
+export function currentWorkspace(): Workspace | undefined {
+  return projectWorkspaces().find((workspace) => workspace.isActive)
+}
+
+/** 清單摘要的領先數以這個分支為準（通常是 main）。 */
+export function defaultTarget(): Workspace | undefined {
+  return projectWorkspaces().find((workspace) => workspace.id === read(state.dashboard)?.defaultTargetId)
+}
+
 export function finishTargets(): Workspace[] {
   const source = selectedWorkspace()
   return source ? projectWorkspaces().filter((workspace) => workspace.id !== source.id) : []
@@ -98,8 +112,8 @@ export function branchName(workspace: Workspace): string {
 
 export function invalidatePreview(): void {
   set(state.preview, null)
-  set(state.summaryPreview, null)
-  set(state.summaryWriting, false)
+  set(state.advicePreview, null)
+  set(state.adviceWriting, false)
   ++requestSequence
   set(state.busy, false)
 }
@@ -113,6 +127,7 @@ export function edit<T>(field: Atom<T>, value: T): void {
   if (read(state.busy)) return
   invalidatePreview()
   set(state.execution, null)
+  if (field === state.finishTargetId || field === state.finishStrategy || field === state.finishSquash) set(state.advice, null)
   set(field, value)
 }
 
@@ -122,8 +137,10 @@ function clearWorkspaceData(): void {
   set(state.preview, null)
   set(state.execution, null)
   set(state.message, '')
-  set(state.finishMessage, '')
   set(state.finishTargetId, '')
+  set(state.finishStrategy, 'merge')
+  set(state.finishSquash, false)
+  set(state.advice, null)
   set(state.removeAfterFinish, true)
   set(state.prs, null)
   set(state.pr, null)
@@ -313,14 +330,38 @@ export async function requestPreview(action: HubAction): Promise<void> {
   await run(() => plugin.request('hub.preview', action, { signal: panelSignal, timeoutMs: 120000 }), (preview) => set(state.preview, preview))
 }
 
+/** 收尾的提交訊息由來源分支產生；沒有新提交且不合成時沿用原提交。 */
+export function finishCommitMessage(): string {
+  const workspace = selectedWorkspace()
+  const needsMessage = Boolean(read(state.snapshot)?.files.length) || read(state.finishSquash)
+  return workspace && needsMessage ? `完成 ${branchName(workspace)}` : ''
+}
+
+/** 收尾按鈕不能按時，用一句話告訴使用者還缺什麼；可以按時回傳空字串。 */
+export function finishBlocker(): string {
+  const workspace = selectedWorkspace()
+  if (!workspace || !canFinish(workspace)) return '這是主要分支，不能在這裡完成。'
+  if (!finishTargets().length) return '還沒有可以合併的分支。請先在 Orca 開啟同專案的另一個工作資料夾。'
+  if (!read(state.snapshot)) return read(state.busy) ? '' : '還沒讀到變更，請按「重新整理」。'
+  if (!finishTargets().some((entry) => entry.id === read(state.finishTargetId))) return '請選擇要合併到哪個分支。'
+  return ''
+}
+
+/** 一鍵改用 Rebase；在確認頁按下會直接重新預覽，實際提交數以預檢結果為準。 */
+export async function finishWithRebase(): Promise<void> {
+  if (read(state.busy) || read(state.executing)) return
+  const confirming = Boolean(read(state.preview))
+  edit(state.finishStrategy, 'rebase')
+  if (confirming) await previewFinish()
+}
+
 export async function previewFinish(): Promise<void> {
   const workspace = selectedWorkspace()
-  const snapshot = read(state.snapshot)
   const target = finishTargets().find((entry) => entry.id === read(state.finishTargetId))
-  if (!workspace || !canFinish(workspace) || !target || !snapshot) return
-  if (snapshot.files.length > 0 && !read(state.finishMessage).trim()) return
+  if (!workspace || !target || read(state.busy) || finishBlocker()) return
   await requestPreview({ kind: 'finish', workspaceId: workspace.id, targetWorkspaceId: target.id,
-    message: snapshot.files.length > 0 ? read(state.finishMessage) : '', remove: read(state.removeAfterFinish) })
+    message: finishCommitMessage(), remove: read(state.removeAfterFinish),
+    strategy: read(state.finishStrategy), squash: read(state.finishSquash) })
 }
 
 export async function executePreview(): Promise<void> {
@@ -347,14 +388,17 @@ async function executeWithToken(obtainToken: () => Promise<string>): Promise<voi
   ++contextSequence
   pendingContextChange = true
   set(state.executing, true)
-  set(state.preview, null)
+  // 執行期間保留確認頁，讓使用者看到正在做哪些步驟；收到結果或失敗後才移除，舊確認不能再送出。
   set(state.execution, null)
   const sequence = begin()
   try {
     const token = await obtainToken()
     if (!isCurrent(sequence)) return
     const answer = await plugin.request('hub.execute', { token }, { signal: panelSignal, timeoutMs: 120000 })
+    set(state.preview, null)
     if (!isCurrent(sequence)) return
+    // 先顯示結果再重新整理清單；否則重新整理期間看起來像回到原點。重新整理可能清掉結果，下方會再設一次。
+    set(state.execution, answer)
     if (read(state.createOpen)) {
       set(state.name, '')
       set(state.prompt, '')
@@ -368,6 +412,7 @@ async function executeWithToken(obtainToken: () => Promise<string>): Promise<voi
     if (executionSignal !== panelSignal || executionSignal?.aborted) return
     set(state.execution, answer)
   } catch (error) {
+    set(state.preview, null)
     if (isCurrent(sequence)) set(state.error, error instanceof Error ? error.message : '結果未知，請重新整理後核對。')
   } finally {
     if (executionSignal === panelSignal && !executionSignal?.aborted) {
@@ -415,30 +460,33 @@ export async function toggleGithub(open: boolean): Promise<void> {
   if (open) await loadPrs()
 }
 
-/** 準備把未提交變更交給 Claude 撰寫完成說明；只取得預覽，等使用者確認後才傳送。 */
-export async function previewSummary(): Promise<void> {
-  const workspaceId = selectedWorkspace()?.id
-  if (!workspaceId || read(state.busy) || read(state.executing)) return
+/** 準備請 Claude 依目前的目標與選擇評估合併風險；只取得預覽，等使用者確認後才傳送。 */
+export async function previewAdvice(): Promise<void> {
+  const workspace = selectedWorkspace()
+  const target = finishTargets().find((entry) => entry.id === read(state.finishTargetId))
+  if (!workspace || !target || read(state.busy) || read(state.executing)) return
   invalidatePreview()
-  await run(() => plugin.request('hub.preview', { kind: 'finish-summary', workspaceId }, { signal: panelSignal, timeoutMs: 120000 }),
-    (preview) => set(state.summaryPreview, preview))
+  set(state.advice, null)
+  await run(() => plugin.request('hub.preview', { kind: 'finish-advice', workspaceId: workspace.id, targetWorkspaceId: target.id,
+    strategy: read(state.finishStrategy), squash: read(state.finishSquash) }, { signal: panelSignal, timeoutMs: 120000 }),
+  (preview) => set(state.advicePreview, preview))
 }
 
-/** 使用者確認後才傳送；結果只填入說明欄，切換工作樹後晚到的結果由 run() 丟棄。 */
-export async function writeSummary(): Promise<void> {
-  const preview = read(state.summaryPreview)
+/** 使用者確認後才傳送；建議只顯示，不改任何選項。切換工作樹後晚到的結果由 run() 丟棄。 */
+export async function writeAdvice(): Promise<void> {
+  const preview = read(state.advicePreview)
   if (!preview || read(state.busy) || read(state.executing)) return
-  set(state.summaryPreview, null)
-  set(state.summaryWriting, true)
+  set(state.advicePreview, null)
+  set(state.adviceWriting, true)
   await run(() => plugin.request('hub.execute', { token: preview.token }, { signal: panelSignal, timeoutMs: 120000 }), (answer) => {
-    if (answer.draft) set(state.finishMessage, answer.draft)
+    if (answer.advice) set(state.advice, answer.advice)
     set(state.notice, answer.message)
   })
-  set(state.summaryWriting, false)
+  set(state.adviceWriting, false)
 }
 
-export function cancelSummary(): void {
-  set(state.summaryPreview, null)
+export function cancelAdvice(): void {
+  set(state.advicePreview, null)
 }
 
 export async function importAiMessage(): Promise<void> {

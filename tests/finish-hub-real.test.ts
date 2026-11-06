@@ -30,7 +30,7 @@ async function fixture(t:{after(fn:()=>Promise<void>):void}) {
     remove:async(value:Workspace)=>{await git(main,'worktree','remove',value.path);workspaces.delete(value.id);removals++}} as unknown as OrcaService
   const storage=new Map<string,unknown>()
   const hub=new Hub(run,{get:async key=>storage.get(key),set:async(key,value)=>{storage.set(key,structuredClone(value))}},async()=>({opened:true}),{git:new GitService(run),github:new GitHubService(run),orca})
-  return {hub,source,target,main,feature,removals:()=>removals,action:{kind:'finish',workspaceId:source.id,targetWorkspaceId:target.id,message:'完成測試功能',remove:true}}
+  return {hub,source,target,main,feature,removals:()=>removals,action:{kind:'finish',workspaceId:source.id,targetWorkspaceId:target.id,message:'完成測試功能',remove:true,strategy:'merge',squash:false}}
 }
 
 test('真實Git從Hub預覽一路提交合併清理，自己的repo鎖不會阻擋收尾',async t=>{
@@ -53,8 +53,28 @@ test('真實Git衝突時來源提交已保存，目標內容不動且工作樹�
   const preview=await f.hub.preview(f.action);const result=await f.hub.execute(preview.token)
   assert.equal(result.status,'needs_attention');assert.equal(result.steps?.[0].status,'done')
   assert.equal(result.steps?.[1].status,'failed');assert.equal(f.removals(),0)
+  assert.match(result.message,/^還沒合併到 main。main 沒有被改動，你的改動都還在。有衝突，無法自動合併。這需要手動處理衝突，請找熟悉 Git 的人協助；處理好後再按「完成這個工作」。原因：main 和這個工作都改過 shared\.txt。$/)
+  assert.equal(result.message.split('沒有被改動').length,2)
   assert.equal(await git(f.main,'rev-parse','HEAD'),before)
   assert.equal(await readFile(join(f.main,'shared.txt'),'utf8'),'target version\n')
   assert.equal(await git(f.feature,'status','--porcelain'),'')
   assert.equal(await git(f.feature,'rev-list','--count','HEAD'),'2')
+})
+
+test('真實Git從Hub選rebase加合成一個：目標只多一個提交且接在最新進度後面，清理後保留分支',async t=>{
+  const f=await fixture(t)
+  for (const name of ['a','b']) {await writeFile(join(f.feature,`${name}.txt`),`${name}\n`);await git(f.feature,'add','--',`${name}.txt`);await git(f.feature,'commit','-m',`add ${name}`)}
+  await writeFile(join(f.main,'main.txt'),'main\n');await git(f.main,'add','main.txt');await git(f.main,'commit','-m','main change')
+  const targetBefore=await git(f.main,'rev-parse','HEAD')
+  await writeFile(join(f.feature,'c.txt'),'c\n')
+  const preview=await f.hub.preview({...f.action,strategy:'rebase',squash:true})
+  assert.match(preview.steps?.[1]??'',/3 個提交合成 1 個/)
+  const result=await f.hub.execute(preview.token)
+  assert.equal(result.status,'completed',JSON.stringify(result))
+  assert.deepEqual(result.steps?.map(x=>x.id),['commit','squash','rebase','merge','cleanup','open'])
+  assert.equal(await git(f.main,'rev-parse','HEAD^'),targetBefore)
+  assert.equal(await git(f.main,'log','-1','--format=%s'),'完成測試功能')
+  for (const name of ['a','b','c','main']) assert.equal(await readFile(join(f.main,`${name}.txt`),'utf8'),`${name}\n`)
+  assert.equal(await git(f.main,'rev-parse','feature'),await git(f.main,'rev-parse','HEAD'))
+  await assert.rejects(stat(f.feature),{code:'ENOENT'})
 })

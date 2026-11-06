@@ -12,13 +12,14 @@ import { OrcaService } from './services/orca'
 import { FinishGitService } from './services/finish'
 import { FinishWorkflow } from './finish-workflow'
 import { OverviewService } from './services/overview'
+import { describeFinish, finishDetail } from './finish-text'
 import { SummaryService } from './services/summary'
 
 type Services = { git: GitService; github: GitHubService; orca: OrcaService; finish?: FinishGitService; overview?: OverviewService; summary?: SummaryService }
 const titles: Record<HubAction['kind'], string> = {
   create: '建立工作區', stage: '暫存選取檔案', commit: '提交已暫存變更',
-  push: 'Push 分支', draft: '建立 Draft PR', cleanup: '清理工作區', 'ai-message': '委派 AI 提交訊息', finish:'本機收尾',
-  'finish-summary': '請 Claude 撰寫完成說明'
+  push: 'Push 分支', draft: '建立 Draft PR', cleanup: '清理工作區', 'ai-message': '委派 AI 提交訊息', finish:'完成工作',
+  'finish-summary': '請 Claude 撰寫完成說明', 'finish-advice': '請 Claude 評估合併風險'
 }
 
 /** 面板操作的唯一入口；每次寫入重新解析工作區與版本。 */
@@ -79,19 +80,18 @@ export class Hub {
     const operation: Omit<Operation, 'createdAt' | 'state'> = {action, workspace, fingerprint: snapshot.fingerprint}
     const detail = await this.previewDetail(operation, snapshot)
     const token = await this.operations.prepare(operation)
-    const current = operation.finish?.plan.source ?? snapshot
-    return {token, title: titles[action.kind], summary: `${workspace.displayName} · ${current.branch || 'detached HEAD'} · ${current.head.slice(0, 12)}`, detail,
-      ...(action.kind === 'finish' ? {steps:[operation.finish?.plan.needsCommit ? '提交列出的全部變更' : '沿用既有提交', '合回本機目標分支', '切換至目標工作樹', action.remove ? '安全清理來源工作樹，保留分支' : '保留來源工作樹']} : {})}
+    if (action.kind === 'finish' && operation.finish) {
+      return {token, title: titles.finish, ...describeFinish(action, operation.finish.plan, operation.finish.target)}
+    }
+    return {token, title: titles[action.kind], summary: `${workspace.displayName} · ${snapshot.branch || 'detached HEAD'} · ${snapshot.head.slice(0, 12)}`, detail}
   }
   private async previewDetail(operation: Omit<Operation, 'createdAt' | 'state'>, snapshot: GitSnapshot): Promise<string> {
     const {action, workspace} = operation
     switch (action.kind) {
       case 'finish': {
         operation.finish = await this.finishWorkflow.prepare(workspace, action)
-        const {target,plan} = operation.finish
-        operation.fingerprint = plan.source.fingerprint
-        const mode = {already_merged:'已合回，只需整理工作樹',fast_forward:'快轉合併',merge_commit:'建立合併提交，保留雙方歷史'}[plan.mergeMode]
-        return `${plan.source.branch} → ${plan.target.branch}\n目標：${target.path}\n合併方式：${mode}\n${action.remove ? '完成後移除來源工作樹，保留分支。' : '完成後保留來源工作樹。'}\n\n${plan.needsCommit ? `提交訊息：\n${action.message}\n\n本次提交全部變更（包含既有暫存）：\n${plan.files.join('\n')}` : '沒有未提交變更，沿用目前提交。'}\n\n會執行儲存庫既有 Git hooks。目標變更、衝突或活動狀態不明時停止並保留現場。\n\n${plan.source.stagedDiff}\n${plan.source.workingDiff}`
+        operation.fingerprint = operation.finish.plan.source.fingerprint
+        return finishDetail(action, operation.finish.plan, operation.finish.target)
       }
       case 'stage': {
         if (action.fingerprint !== snapshot.fingerprint) throw new Error('工作區已變更，請重新整理後選取。')
@@ -110,6 +110,17 @@ export class Hub {
         operation.fingerprint = material.fingerprint
         operation.summary = material.text
         return `確認後，會把下方 ${material.files.length} 個檔案的未提交變更傳給 Claude（Anthropic 的 AI 服務），請它撰寫完成說明。\nClaude 不能使用任何工具，不會修改檔案，也不會開啟終端。寫好的說明只會填進表單，不會自動提交。\n已檢查部分常見的敏感檔名（含已刪除或改名的檔案）與金鑰格式，沒有發現。這只能擋下常見格式，無法保證沒有機密，送出前請確認下方內容沒有密碼或金鑰。${material.truncated ? '\n內容過長，只傳送前面的部分。' : ''}\n\n${material.text}`
+      }
+      case 'finish-advice': {
+        const target = await this.adviceTarget(workspace, action.targetWorkspaceId)
+        const targetHead = (await this.services.git.snapshot(target.path)).head
+        const choice = `${action.strategy === 'rebase' ? '接到最後面（rebase）' : '一般合併（merge）'}，${action.squash ? '合成一個提交' : '保留每個提交'}`
+        const material = await this.services.git.adviceMaterial(workspace.path, targetHead, target.branch.replace(/^refs\/heads\//, ''), choice)
+        operation.fingerprint = material.fingerprint
+        operation.summary = material.text
+        operation.adviceFacts = material.facts
+        operation.baseSha = targetHead
+        return `確認後，會把下方內容傳給 Claude（Anthropic 的 AI 服務），請它評估合併到 ${target.displayName} 的風險。\nClaude 不能使用任何工具，不會修改檔案。建議只供參考，不會改變你的選擇。\n目標分支只傳檔名，不傳內容。已檢查部分常見的敏感檔名與金鑰格式，沒有發現；這無法保證沒有機密，送出前請確認。${material.truncated ? '\n內容過長，只傳送前面的部分。' : ''}\n\n${material.text}`
       }
       case 'cleanup': {
         await this.safeCleanup(workspace, action.base)
@@ -144,6 +155,7 @@ export class Hub {
       if (workspace.path !== operation.workspace.path || workspace.repoId !== operation.workspace.repoId) throw new Error('工作區身分已變更，請重新預覽。')
       // 撰寫說明只讀取且最多等 110 秒，不持有整個 repo 共用的 Hub 鎖，以免擋住其他工作樹的操作。
       if (action.kind === 'finish-summary') return this.writeSummary({...operation,action,workspace}, signal)
+      if (action.kind === 'finish-advice') return this.writeAdvice({...operation,action,workspace}, signal)
       return this.operations.withLock(workspace, async () => {
         const snapshot = await this.services.git.snapshot(workspace.path)
         if (snapshot.fingerprint !== operation.fingerprint) throw new Error('工作區已變更，預覽已失效。')
@@ -189,6 +201,7 @@ export class Hub {
       case 'draft': return this.createDraft(operation,snapshot)
       case 'ai-message': return this.launchMessage(workspace,action.agent,snapshot)
       case 'finish-summary': throw new Error('撰寫說明不經由寫入流程執行。')
+      case 'finish-advice': throw new Error('合併建議不經由寫入流程執行。')
     }
   }
   /** 只送使用者預覽過的內容；工作區在預覽後變更就拒絕，避免說明和實際變更不符。 */
@@ -198,6 +211,31 @@ export class Hub {
     if (!operation.summary) throw new Error('說明預覽資料不完整，請重新產生。')
     const summary = this.services.summary ?? new SummaryService(this.run)
     return {message: '已填入 Claude 寫的說明，請檢查並修改後再繼續。', draft: await summary.write(operation.summary, signal)}
+  }
+  /** 合併建議的目標必須是同一個儲存庫的其他工作樹，來源必須是功能工作樹。 */
+  private async adviceTarget(source: Workspace, targetId: string): Promise<Workspace> {
+    if (source.isMainWorktree || source.isDefaultBranch) throw new Error('主要工作樹或預設分支不需要合併建議，請選功能工作樹。')
+    const target = await this.services.orca.resolve(targetId)
+    if (target.id === source.id || target.path === source.path) throw new Error('來源與目標工作樹不可相同。')
+    if (target.repoId !== source.repoId) throw new Error('目標必須位於同一個儲存庫。')
+    return target
+  }
+  /** 只送使用者預覽過的內容；來源內容或目標分支在預覽後變了就拒絕，避免建議和實際狀況不符。不持有 repo 鎖。 */
+  private async writeAdvice(operation: Operation, signal?: AbortSignal): Promise<Execution> {
+    if (operation.action.kind !== 'finish-advice') throw new Error('操作類型無效。')
+    const snapshot = await this.services.git.snapshot(operation.workspace.path)
+    if (snapshot.fingerprint !== operation.fingerprint) throw new Error('工作區已變更，預覽已失效。')
+    const target = await this.adviceTarget(operation.workspace, operation.action.targetWorkspaceId)
+    if ((await this.services.git.snapshot(target.path)).head !== operation.baseSha) throw new Error('目標分支已變更，請重新產生建議。')
+    if (!operation.summary || !operation.adviceFacts) throw new Error('建議預覽資料不完整，請重新產生。')
+    const summary = this.services.summary ?? new SummaryService(this.run)
+    const advice = await summary.advise(operation.summary, signal)
+    // 資料裡的文字可能誘導 AI 說「風險低」；顯示的等級至少要符合 Git 算出的事實。
+    const facts = operation.adviceFacts
+    const floor = facts.conflict ? '高' : facts.overlap.length ? '中' : '低'
+    const order = ['低', '中', '高'] as const
+    const raised = advice.level !== '未知' && order.indexOf(advice.level) < order.indexOf(floor)
+    return {message: '已取得 Claude 的合併建議，僅供參考。', advice: {...advice, level: raised ? floor : advice.level, facts, raised}}
   }
   private async createDraft(operation: Operation, snapshot: GitSnapshot): Promise<Execution> {
     if (operation.action.kind !== 'draft') throw new Error('操作類型無效。')

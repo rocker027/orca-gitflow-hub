@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
+import { userInfo } from 'node:os'
 import type { Run } from '../contracts'
 
 export type Executables = Record<'git' | 'orca' | 'gh' | 'claude', string>
@@ -11,11 +12,18 @@ export function cancelAll(): void {
   for (const cancel of active.values()) cancel()
 }
 
+/** 目前使用者名稱；取不到時回傳空字串，不讓環境準備失敗。 */
+function currentUser(): string {
+  try { return userInfo().username } catch { return '' }
+}
+
 function environment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const inherited = Object.fromEntries(Object.entries(source).filter(([key]) =>
     !key.startsWith('GIT_') && !['SSH_ASKPASS', 'SSH_ASKPASS_REQUIRE'].includes(key)))
-  return {...inherited, GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', PAGER: 'cat',
-    GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', NO_COLOR: '1'}
+  // macOS 的 claude 依 USER 從鑰匙圈讀取登入資料；Orca Worker 的環境可能沒有 USER，會被誤判成未登入。
+  const user = source.USER || source.LOGNAME || currentUser()
+  return {...inherited, ...(user ? {USER: source.USER || user, LOGNAME: source.LOGNAME || user} : {}),
+    GIT_TERMINAL_PROMPT: '0', GIT_PAGER: 'cat', PAGER: 'cat', GH_PROMPT_DISABLED: '1', GH_NO_UPDATE_NOTIFIER: '1', NO_COLOR: '1'}
 }
 
 function terminate(child: ChildProcess): Promise<void> {

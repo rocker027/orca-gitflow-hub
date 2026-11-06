@@ -199,7 +199,9 @@ export class OrcaService {
     if (!isObject(activity) || typeof activity.liveTerminalCount !== 'number' || typeof activity.unverifiableTerminalCount !== 'number' ||
       !Array.isArray(activity.agents) || typeof activity.hasAttachedPty !== 'boolean') throw new Error('工作區活動狀態未知，已停止清理。')
     if (activity.liveTerminalCount !== 0 || activity.unverifiableTerminalCount !== 0 || activity.hasAttachedPty || !activity.agents.every(agent => finishedAgent(agent))) {
-      throw new Error('工作區仍有終端或 Agent，請先在 Orca 關閉後再清理。')
+      const branch = workspace.branch.replace(/^refs\/heads\//, '')
+      const name = workspace.displayName && workspace.displayName !== branch ? `「${workspace.displayName}」（${branch}）` : `「${branch || workspace.displayName}」`
+      throw new Error(`${name}還開著終端機或 AI 助手。請在 Orca 把它們關掉後再試一次。`)
     }
   }
 
