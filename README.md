@@ -123,7 +123,8 @@ Agent 權限由 Orca 設定控制；限定任務的提示詞沒有替 Agent 新�
 - `origin` 接受無內嵌憑證的 HTTPS、SSH 或 SCP URL。Git 展開後的 fetch／push 目的地須可核對；目前 Push 要求兩者 URL 一致。
 - 不自動 fetch、force push、reset、刪分支、發布審查留言或遠端合併。未追蹤檔案會列出，但暫存前不會出現在一般 Git Diff。
 - 清理拒絕主要工作區與預設分支、dirty／untracked／ignored 檔案、submodule、鎖定、進行中的 Git 操作，以及無法證明已合併的 HEAD。來源有 ignored 檔（例如 `.env`、`node_modules`）且選了移除資料夾時，會在預覽階段先提示取消移除，尚不提交或合併。
-- 收尾前需確認來源與目標都沒有存活或狀態不明的終端／Agent。已完成的 Agent 歷史可保留；閒置 shell 仍需關閉。清理完成保留本機分支。
+- 收尾前，目標工作樹不能有存活或狀態不明的終端／Agent。來源工作樹一律不能有執行中的 Agent；來源終端只有在勾選「完成後移除資料夾」或選 Rebase 時才需關閉，選 Merge 且保留資料夾時可以開著。選 Rebase 仍要關閉，是因為 rebase 失敗的自動還原會覆蓋終端剛改的已追蹤檔案。已完成的 Agent 歷史可保留。清理完成保留本機分支。
+- 來源終端開著時，收尾期間不要在該終端改檔。提交前的檢查與 `git add` 之間有極短空窗，這時寫入的內容可能進入提交，卻沒出現在預覽。在一般終端手動啟動的 CLI Agent 是否會被 Orca 列為執行中的 Agent 尚未驗證；Orca 自己的 Agent 對話會被列入。
 - 本機收尾要求目標乾淨，來源為功能工作樹，且雙方都已登錄 Orca。不支援 detached HEAD、submodule、進行中的 Git 操作、未知鎖或隱藏變更的 index flags／稀疏 checkout。Git 需支援 `merge-tree --write-tree`；rebase 與合成另需 `--merge-base` 並接受 tree 參數（Git 2.40 起提供 `--merge-base`，本機只在 2.50.1 實測）。舊版 Git 會在預檢失敗並停止，訊息可能顯示為衝突。
 - 衝突預檢失敗時，來源可能已提交，目標尚未合併，也不會合成或 rebase。實際 merge／hook 失敗則可能已寫入目標，顯示 UNKNOWN 並保留現場，不自動 rollback 或重送。唯一的自動還原是外掛自己啟動的 rebase 失敗時執行 `git rebase --abort`。
 - 目標只能是 Orca 已登錄、已 checkout 該分支的工作樹，不支援未 checkout 的任意本機分支。

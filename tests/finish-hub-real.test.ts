@@ -26,7 +26,7 @@ async function fixture(t:{after(fn:()=>Promise<void>):void}) {
   const ws=(path:string,main:boolean):Workspace=>({id:`repo::${path}`,repoId:'repo',path,branch:main?'main':'feature',head:'',displayName:main?'main':'feature',hostId:'local',isMainWorktree:main})
   const source=ws(feature,false);const target=ws(main,true);const workspaces=new Map([[source.id,source],[target.id,target]])
   let removals=0
-  const orca={list:async()=>({workspaces:[...workspaces.values()],warnings:[]}),resolve:async(id:string)=>{const value=workspaces.get(id);if(!value)throw new Error('工作樹不存在');return value},assertIdle:async()=>undefined,
+  const orca={list:async()=>({workspaces:[...workspaces.values()],warnings:[]}),resolve:async(id:string)=>{const value=workspaces.get(id);if(!value)throw new Error('工作樹不存在');return value},assertIdle:async()=>undefined,activity:async()=>({agentsBusy:false,terminalsOpen:false}),
     remove:async(value:Workspace)=>{await git(main,'worktree','remove',value.path);workspaces.delete(value.id);removals++}} as unknown as OrcaService
   const storage=new Map<string,unknown>()
   const hub=new Hub(run,{get:async key=>storage.get(key),set:async(key,value)=>{storage.set(key,structuredClone(value))}},async()=>({opened:true}),{git:new GitService(run),github:new GitHubService(run),orca})

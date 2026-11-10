@@ -93,6 +93,20 @@ test('清理只在明確沒有 Agent 與終端時允許', async () => {
   await assert.rejects(serviceFor({...idle, liveTerminalCount: undefined}).assertIdle(base), /未知/)
 })
 
+test('活動狀態分開回報終端與執行中的 Agent，不完整時拒絕', async () => {
+  const idle = {worktreeId: base.id, hostId: 'local', liveTerminalCount: 0, unverifiableTerminalCount: 0, agents: [], terminalVerdict: 'none', hasAttachedPty: false}
+  const serviceFor = (row: unknown, extra = {}) => new OrcaService(async () => envelope({worktrees: [row], truncated: false, hostScope: {hostIds: ['local'], omittedHostIds: []}, ...extra}))
+  assert.deepEqual(await serviceFor(idle).activity(base), {agentsBusy: false, terminalsOpen: false})
+  for (const row of [{...idle, liveTerminalCount: 1}, {...idle, unverifiableTerminalCount: 1}, {...idle, hasAttachedPty: true}]) {
+    assert.deepEqual(await serviceFor({...row, agents: [{state: 'done', children: []}]}).activity(base), {agentsBusy: false, terminalsOpen: true})
+  }
+  assert.deepEqual(await serviceFor({...idle, agents: [{state: 'working'}]}).activity(base), {agentsBusy: true, terminalsOpen: false})
+  // 完整檢查仍拒絕「Agent 已完成但終端開著」這個最常見的情況。
+  await assert.rejects(serviceFor({...idle, liveTerminalCount: 1, agents: [{state: 'done', children: []}]}).assertIdle(base), /還開著終端機/)
+  await assert.rejects(serviceFor(idle, {truncated: true}).activity(base), /完整/)
+  await assert.rejects(serviceFor({...idle, liveTerminalCount: undefined}).activity(base), /未知/)
+})
+
 test('已完成的 Agent 歷史可收尾，活動中子 Agent 與未知狀態仍拒絕', async () => {
   const idle = {worktreeId:base.id,hostId:'local',liveTerminalCount:0,unverifiableTerminalCount:0,hasAttachedPty:false}
   const serviceFor = (agents: unknown[]) => new OrcaService(async () => envelope({worktrees:[{...idle,agents}],truncated:false,hostScope:{hostIds:['local'],omittedHostIds:[]}}))

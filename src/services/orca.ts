@@ -109,6 +109,12 @@ function launchHandle(reply: ObjectValue): string {
   return outcome.handle
 }
 
+/** 錯誤訊息用的工作名稱：顯示名稱與分支不同時兩者並列。 */
+export function workspaceLabel(workspace: Workspace): string {
+  const branch = workspace.branch.replace(/^refs\/heads\//, '')
+  return workspace.displayName && workspace.displayName !== branch ? `「${workspace.displayName}」（${branch}）` : `「${branch || workspace.displayName}」`
+}
+
 function finishedAgent(value: unknown, depth = 0): boolean {
   if (!isObject(value) || depth > 20 || value.state !== 'done') return false
   if (value.mainAgent !== undefined && (!isObject(value.mainAgent) || value.mainAgent.state !== 'done')) return false
@@ -187,7 +193,11 @@ export class OrcaService {
     decode(await this.run('orca', ['reference', 'add', url, '--worktree', `id:${workspace.id}`, '--json'], {cwd: workspace.path}))
   }
 
-  async assertIdle(workspace: Workspace): Promise<void> {
+  /**
+   * 讀取工作區目前的終端與 AI 助手狀態；狀態取不到完整資料時一律拒絕，不當成閒置。
+   * @returns agentsBusy 有未結束的 AI 助手；terminalsOpen 有存活、狀態不明的終端或 attached PTY
+   */
+  async activity(workspace: Workspace): Promise<{agentsBusy: boolean; terminalsOpen: boolean}> {
     local(workspace)
     const reply = decode(await this.run('orca', ['worktree', 'ps', '--limit', '10000', '--json']))
     const scope = reply.hostScope
@@ -198,11 +208,16 @@ export class OrcaService {
     const activity = reply.worktrees.find(item => isObject(item) && item.worktreeId === workspace.id && item.hostId === 'local')
     if (!isObject(activity) || typeof activity.liveTerminalCount !== 'number' || typeof activity.unverifiableTerminalCount !== 'number' ||
       !Array.isArray(activity.agents) || typeof activity.hasAttachedPty !== 'boolean') throw new Error('工作區活動狀態未知，已停止清理。')
-    if (activity.liveTerminalCount !== 0 || activity.unverifiableTerminalCount !== 0 || activity.hasAttachedPty || !activity.agents.every(agent => finishedAgent(agent))) {
-      const branch = workspace.branch.replace(/^refs\/heads\//, '')
-      const name = workspace.displayName && workspace.displayName !== branch ? `「${workspace.displayName}」（${branch}）` : `「${branch || workspace.displayName}」`
-      throw new Error(`${name}還開著終端機或 AI 助手。請在 Orca 把它們關掉後再試一次。`)
+    return {
+      agentsBusy: !activity.agents.every(agent => finishedAgent(agent)),
+      terminalsOpen: activity.liveTerminalCount !== 0 || activity.unverifiableTerminalCount !== 0 || activity.hasAttachedPty
     }
+  }
+
+  /** 確認工作區沒有存活的終端或 AI 助手。 */
+  async assertIdle(workspace: Workspace): Promise<void> {
+    const {agentsBusy, terminalsOpen} = await this.activity(workspace)
+    if (agentsBusy || terminalsOpen) throw new Error(`${workspaceLabel(workspace)}還開著終端機或 AI 助手。請在 Orca 把它們關掉後再試一次。`)
   }
 
   async remove(workspace: Workspace): Promise<void> {

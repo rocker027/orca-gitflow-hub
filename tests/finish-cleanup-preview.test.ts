@@ -31,6 +31,7 @@ async function workflowFixture(t: { after(fn: () => Promise<void>): void }) {
       return match
     },
     assertIdle: async () => undefined,
+    activity: async () => ({agentsBusy: false, terminalsOpen: false}),
     remove: async () => { removals++ }
   } as unknown as OrcaService
   const workflow = new FinishWorkflow(f.snapshots, orca, f.service, async () => ({ opened: true }))

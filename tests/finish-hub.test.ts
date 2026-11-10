@@ -27,15 +27,16 @@ async function fixture(t:{after(fn:()=>Promise<void>):void}) {
     list:async()=>({workspaces:[...workspaces.values()],warnings:[]}),
     resolve:async(id:string)=>{const ws=workspaces.get(id);if(!ws)throw new Error('工作區已移除');return structuredClone(ws)},
     assertIdle:async(ws:Workspace)=>{hit(`idle:${ws.branch}`)},
+    activity:async(ws:Workspace)=>{hit(`activity:${ws.branch}`);return {agentsBusy:faults.has(`agents:${ws.branch}`),terminalsOpen:faults.has(`terminals:${ws.branch}`)}},
     remove:async(ws:Workspace)=>{hit('cleanup');workspaces.delete(ws.id);await rm(ws.path,{recursive:true})}
   } as unknown as OrcaService
   const finish={
     prepare:async(_s:string,_t:string,_m:string,options:{strategy:'merge'|'rebase';squash:boolean})=>{hit('prepare');return {source:structuredClone(snapshots.get(source.path)),target:structuredClone(snapshots.get(target.path)),files:['a.txt'],ahead:2,behind:1,needsCommit:true,
       strategy:options.strategy,squash:options.squash,squashCount:options.squash?3:0,pushedCount:1,mergeMode:options.strategy==='rebase'?'rebase':'merge_commit'} as FinishPlan},
-    commit:async()=>{hit('commit');snapshots.set(source.path,{...snapshots.get(source.path)!,head:'c'.repeat(40),fingerprint:'committed',files:[]});return 'c'.repeat(40)},
+    commit:async()=>{hit('commit');if(faults.has('terminals-after-commit'))faults.add('terminals:feature');snapshots.set(source.path,{...snapshots.get(source.path)!,head:'c'.repeat(40),fingerprint:'committed',files:[]});return 'c'.repeat(40)},
     squash:async(_p:string,plan:FinishPlan,head:string)=>{if(!plan.squash)return head;hit('squash');snapshots.set(source.path,{...snapshots.get(source.path)!,head:'e'.repeat(40),fingerprint:'squashed'});return 'e'.repeat(40)},
     rebase:async(_p:string,plan:FinishPlan,head:string)=>{if(plan.strategy!=='rebase')return head;hit('rebase');snapshots.set(source.path,{...snapshots.get(source.path)!,head:'f'.repeat(40),fingerprint:'rebased'});return 'f'.repeat(40)},
-    merge:async()=>{hit('merge');if(faults.has('merge-unknown'))throw new Error('合併結果待核對（UNKNOWN），可能已修改目標，請保留工作樹：post-merge hook');snapshots.set(target.path,{...snapshots.get(target.path)!,head:'d'.repeat(40),fingerprint:'merged'});return 'd'.repeat(40)}
+    merge:async()=>{hit('merge');if(faults.has('merge-activates-source'))faults.add('terminals:feature');if(faults.has('merge-unknown'))throw new Error('合併結果待核對（UNKNOWN），可能已修改目標，請保留工作樹：post-merge hook');snapshots.set(target.path,{...snapshots.get(target.path)!,head:'d'.repeat(40),fingerprint:'merged'});return 'd'.repeat(40)}
   } as unknown as FinishGitService
   const hub=new Hub(async()=>root,{get:async key=>values.get(key),set:async(key,value)=>{values.set(key,structuredClone(value))}},async()=>{
     hit('open')
@@ -103,10 +104,75 @@ test('預設分支即使位於 linked worktree 也不可收尾或清理',async t
   assert.equal(f.calls.includes('commit'),false);assert.equal(f.calls.includes('cleanup'),false)
 })
 
+const previewError=(f:Awaited<ReturnType<typeof fixture>>,action:object)=>f.hub.preview(action as typeof f.action).then(()=>null,(caught:unknown)=>caught as Error)
+
+test('Merge 且保留資料夾時，來源終端開著仍可收尾，目標仍須閒置',async t=>{
+  const f=await fixture(t);const action={...f.action,remove:false};f.faults.add('terminals:feature')
+  const outcome=await f.hub.execute((await f.hub.preview(action)).token)
+  assert.equal(outcome.status,'completed',JSON.stringify(outcome))
+  assert.ok(f.calls.includes('activity:feature'));assert.equal(f.calls.includes('idle:feature'),false);assert.equal(f.calls.includes('cleanup'),false)
+  f.faults.add('idle:main')
+  await assert.rejects(f.hub.preview(action),/idle:main/)
+})
+
+test('來源有 AI 助手執行中時一律拒絕，且不提示改選',async t=>{
+  const f=await fixture(t);f.faults.add('agents:feature')
+  for (const option of [{remove:false},{remove:true},{remove:false,strategy:'rebase'}]) {
+    const error=await previewError(f,{...f.action,...option})
+    assert.match(String(error?.message),/還有 AI 助手在執行/);assert.doesNotMatch(String(error?.message),/取消勾選|改選/)
+  }
+  assert.equal(f.calls.includes('commit'),false)
+})
+
+test('要移除資料夾時來源終端開著會拒絕，並提示可改為保留資料夾',async t=>{
+  const f=await fixture(t);f.faults.add('terminals:feature')
+  const error=await previewError(f,f.action)
+  assert.match(String(error?.message),/還開著終端機/);assert.match(String(error?.message),/取消勾選「完成後移除資料夾」/)
+})
+
+test('選 Rebase 時來源終端開著會拒絕，即使保留資料夾，並提示改選 Merge',async t=>{
+  const f=await fixture(t);f.faults.add('terminals:feature')
+  for (const remove of [false,true]) {
+    const error=await previewError(f,{...f.action,remove,strategy:'rebase'})
+    assert.match(String(error?.message),/還開著終端機/);assert.match(String(error?.message),/改選 Merge 並保留資料夾/)
+    assert.doesNotMatch(String(error?.message),/取消勾選/)
+  }
+})
+
+test('預覽後才開啟來源終端，執行時在提交前擋下並保留提示',async t=>{
+  const f=await fixture(t);const preview=await f.hub.preview(f.action);f.faults.add('terminals:feature')
+  const outcome=await f.hub.execute(preview.token)
+  assert.equal(outcome.status,'needs_attention');assert.equal(f.calls.includes('commit'),false)
+  assert.match(outcome.message,/還開著終端機/);assert.match(outcome.message,/取消勾選/)
+})
+
+test('保留資料夾時預覽後才有 AI 助手執行，執行時在提交前擋下',async t=>{
+  const f=await fixture(t);const action={...f.action,remove:false};const preview=await f.hub.preview(action);f.faults.add('agents:feature')
+  const outcome=await f.hub.execute(preview.token)
+  assert.equal(outcome.status,'needs_attention');assert.equal(f.calls.includes('commit'),false)
+  assert.match(outcome.message,/還有 AI 助手在執行/);assert.doesNotMatch(outcome.message,/取消勾選|改選/)
+})
+
+test('提交後才開啟來源終端，合併前擋下且不再提示改選',async t=>{
+  const f=await fixture(t);const preview=await f.hub.preview(f.action);f.faults.add('terminals-after-commit')
+  const outcome=await f.hub.execute(preview.token)
+  assert.equal(outcome.status,'needs_attention');assert.equal(f.calls.includes('merge'),false)
+  assert.match(outcome.message,/還開著終端機/);assert.doesNotMatch(outcome.message,/取消勾選|改選/)
+})
+
+test('合併後清理時來源終端被開啟，停止清理且不再提示改選',async t=>{
+  const f=await fixture(t);const preview=await f.hub.preview(f.action);f.faults.add('merge-activates-source')
+  const outcome=await f.hub.execute(preview.token)
+  assert.equal(outcome.status,'needs_attention')
+  assert.equal(outcome.steps?.find(step=>step.id==='cleanup')?.status,'failed')
+  assert.equal(f.calls.includes('cleanup'),false)
+  assert.match(outcome.message,/還開著終端機/);assert.doesNotMatch(outcome.message,/取消勾選|改選/)
+})
+
 test('來源或目標活動中時預覽拒絕，執行前再檢查',async t=>{
   const f=await fixture(t);f.faults.add('idle:main')
   await assert.rejects(f.hub.preview(f.action),/失敗/)
-  f.faults.clear();const preview=await f.hub.preview(f.action);f.faults.add('idle:feature')
+  f.faults.clear();const preview=await f.hub.preview(f.action);f.faults.add('terminals:feature')
   const result=await f.hub.execute(preview.token)
   assert.equal(result.status,'needs_attention');assert.equal(f.calls.includes('commit'),false)
 })
