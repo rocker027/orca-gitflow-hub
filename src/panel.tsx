@@ -1,6 +1,6 @@
 import {
-  Badge, Button, Callout, Card, Checkbox, Code, Collapsible, EmptyState, Grid, Heading, IconButton, Image,
-  Input, Link, List, ListItem, RadioGroup, read, Row, Select, Separator, Spinner, Stack, Text, Textarea, type PanelContext
+  Badge, Box, Button, Callout, Card, Checkbox, Code, Collapsible, EmptyState, env, Grid, Heading, IconButton, Image,
+  Input, Link, List, ListItem, read, Row, Select, Separator, Spinner, Stack, Text, Textarea, type PanelContext
 } from 'orca'
 import type { Workspace, WorkspaceSummary } from './contracts'
 import type { FinishStrategy } from './protocol'
@@ -48,21 +48,21 @@ function WorkspaceStatus({ workspace }: { workspace: Workspace }) {
   </Text>
   const target = defaultTarget()
   return <Stack gap="xs">
-    <Text size="sm" muted={!summary.changedFiles}>
-      {summary.changedFiles ? `${summary.changedFiles} 個檔案未提交` : '沒有未提交的變更'}
-    </Text>
+    <Row gap="xs" wrap>
+      {summary.changedFiles ? <Badge tone="warning">{`${summary.changedFiles} 個檔案未提交`}</Badge>
+        : <Text size="sm" muted>沒有未提交的變更</Text>}
+    </Row>
     {canFinish(workspace) && target && Boolean(summary.ahead) &&
       <Text size="sm" muted>{`${summary.ahead} 個提交待合併至 ${branchName(target)}`}</Text>}
   </Stack>
 }
 
-function WorkspaceTitle({ workspace }: { workspace: Workspace }) {
+function WorkspaceTitle({ workspace, current = false }: { workspace: Workspace; current?: boolean }) {
   const branch = summaryOf(workspace)?.branch.replace(/^refs\/heads\//, '') || branchName(workspace)
   const title = workspace.displayName || branch
   return <Stack gap="xs">
-    <Text weight="semibold">{title}</Text>
+    {current ? <Heading level={2}>{title}</Heading> : <Text weight="semibold">{title}</Text>}
     {title !== branch && <Text muted size="sm">{branch}</Text>}
-    <WorkspaceStatus workspace={workspace} />
   </Stack>
 }
 
@@ -70,30 +70,37 @@ function WorkspaceTitle({ workspace }: { workspace: Workspace }) {
 function CurrentWork({ workspace }: { workspace: Workspace }) {
   const disabled = read(state.executing)
   const working = canFinish(workspace)
-  return <Stack key="current-work" gap="sm">
-    <Text size="sm" muted>{working ? '目前工作' : '目前在主要分支'}</Text>
-    <WorkspaceTitle workspace={workspace} />
-    <Stack gap="xs" align="stretch">
-      {working &&
+  return <Box key="current-work" background="muted" border radius="lg" padding="md">
+    <Stack gap="md">
+      <Row justify="between" align="center" gap="sm" wrap>
+        <Text size="sm" muted>{working ? '目前工作' : '目前在主要分支'}</Text>
+        <Badge tone="accent">已開啟</Badge>
+      </Row>
+      <WorkspaceTitle workspace={workspace} current />
+      <WorkspaceStatus workspace={workspace} />
+      {!working && <Text size="sm" muted>主要分支用來接收完成的工作。</Text>}
+      {working && <Stack align="stretch">
         <Button key={`finish:${workspace.id}`} variant="solid" icon="check" disabled={disabled}
-          onPress={() => selectWorkspace(workspace.id, 'finish')}>完成這個工作</Button>}
+          onPress={() => selectWorkspace(workspace.id, 'finish')}>完成這個工作</Button>
+      </Stack>}
     </Stack>
-  </Stack>
+  </Box>
 }
 
 function WorkspaceRow({ workspace }: { workspace: Workspace }) {
   const disabled = read(state.executing)
   const primary = !canFinish(workspace)
   return <ListItem key={`workspace:${workspace.id}`}>
-    <Stack gap="sm">
+    <Box paddingY="sm" width="100%" minWidth={0} gap="sm">
       <WorkspaceTitle workspace={workspace} />
+      <WorkspaceStatus workspace={workspace} />
       <Row gap="sm" wrap>
-        <Button key={`open:${workspace.id}`} variant="outline" size="sm" disabled={disabled || read(state.busy)}
+        <Button key={`open:${workspace.id}`} variant="outline" size="sm" icon="folder" disabled={disabled || read(state.busy)}
           onPress={() => openWorkspace(workspace.id)}>{primary ? '開啟分支' : '切換過去'}</Button>
-        {!primary && <Button key={`finish:${workspace.id}`} variant="outline" size="sm" disabled={disabled}
+        {!primary && <Button key={`finish:${workspace.id}`} variant="ghost" size="sm" icon="check" disabled={disabled}
           onPress={() => selectWorkspace(workspace.id, 'finish')}>完成工作</Button>}
       </Row>
-    </Stack>
+    </Box>
   </ListItem>
 }
 
@@ -104,17 +111,30 @@ function WorkspaceList() {
   const others = projectWorkspaces().filter((workspace) => workspace.id !== current?.id)
   const matches = others.filter((workspace) =>
     `${branchName(workspace)} ${workspace.displayName}`.toLocaleLowerCase().includes(query))
-  const groups = [
-    { title: current && canFinish(current) ? '其他進行中的工作' : '進行中的工作', rows: matches.filter(canFinish) },
-    { title: '主要分支', rows: matches.filter((workspace) => !canFinish(workspace)) }
-  ]
+  const working = Boolean(current && canFinish(current))
+  const tasks = matches.filter(canFinish)
+  const primary = matches.filter((workspace) => !canFinish(workspace))
+  const title = working ? '其他進行中的工作' : '進行中的工作'
   return <Stack gap="md">
+    <Row justify="between" align="center" gap="sm" wrap>
+      <Row gap="sm" align="center">
+        <Text weight="semibold">{title}</Text>
+        <Badge>{tasks.length}</Badge>
+      </Row>
+      <Button variant={working ? 'outline' : 'solid'} icon="add" size="sm" disabled={read(state.busy) || !selectedWorkspace()}
+        onPress={startWork}>開始新工作</Button>
+    </Row>
     {others.length > 5 && <Input label="搜尋工作" type="search" value={read(state.search)} placeholder="輸入工作名稱或分支名稱"
       disabled={read(state.executing)} onChange={(value) => edit(state.search, value)} />}
-    {groups.filter((group) => group.rows.length).map((group) => <Stack key={group.title} gap="sm">
-      <Text size="sm" muted>{group.title}</Text>
-      <List>{group.rows.map((workspace) => <WorkspaceRow key={workspace.id} workspace={workspace} />)}</List>
-    </Stack>)}
+    {tasks.length > 0 && <List label={title}>{tasks.map((workspace) => <WorkspaceRow key={workspace.id} workspace={workspace} />)}</List>}
+    {!read(state.busy) && !query && !tasks.length && <Box paddingY="md">
+      <Text muted size="sm">{working ? '沒有其他進行中的工作。' : '還沒有進行中的工作。點「開始新工作」建立第一個。'}</Text>
+    </Box>}
+    {primary.length > 0 && <Stack gap="sm">
+      <Separator />
+      <Text size="sm" muted>主要分支</Text>
+      <List label="主要分支">{primary.map((workspace) => <WorkspaceRow key={workspace.id} workspace={workspace} />)}</List>
+    </Stack>}
     {!read(state.busy) && query && matches.length === 0 && <EmptyState title="找不到這個工作"
       description="試試其他名稱，或清除搜尋查看全部工作。">
       <Button variant="outline" onPress={() => edit(state.search, '')}>清除搜尋</Button>
@@ -125,20 +145,13 @@ function WorkspaceList() {
 function Home() {
   const workspaces = projectWorkspaces()
   const current = currentWorkspace()
-  const working = Boolean(current && canFinish(current))
   if (!workspaces.length) {
     return read(state.busy) || read(state.error) ? null : <EmptyState
       title="先加入一個專案" description="請在 Orca 開啟已有 Git 提交的本機專案，再按「重新整理」。" />
   }
-  return <Stack gap="md">
+  return <Stack gap="lg">
     {current && <CurrentWork workspace={current} />}
-    <Stack align="stretch">
-      <Button variant={working ? 'outline' : 'solid'} icon="add" disabled={read(state.busy) || !selectedWorkspace()}
-        onPress={startWork}>開始新工作</Button>
-    </Stack>
     {!read(state.busy) && !selectedWorkspace() && <Text tone="warning" size="sm">請先重新整理專案狀態，再建立工作。</Text>}
-    {!read(state.busy) && !workspaces.some(canFinish) && <Text muted>還沒有進行中的工作。點「開始新工作」建立第一個。</Text>}
-    <Separator />
     <WorkspaceList />
   </Stack>
 }
@@ -173,34 +186,74 @@ function CreateWorkspace() {
   </Card>
 }
 
-/** 兩張圖使用相同的分歧範例；不拿預設目標摘要冒充目前所選目標的實際提交圖。 */
-function FinishStrategies() {
-  const strategy = read(state.finishStrategy)
+/** 圖使用相同的分歧範例；透明圖資依宿主主題切換，不冒充目前專案的提交圖。 */
+function FinishDiagram({ strategy }: { strategy: FinishStrategy }) {
   const squash = read(state.finishSquash)
-  const variants: FinishStrategy[] = ['merge', 'rebase']
-  return <Stack gap="sm">
-    <RadioGroup label="合併方式" value={strategy} disabled={read(state.busy)} orientation="horizontal"
-      options={[{ value: 'merge', label: 'Merge' }, { value: 'rebase', label: 'Rebase' }]}
-      onChange={(value) => edit(state.finishStrategy, value as FinishStrategy)} />
-    <Grid minItemWidth="md" gap="sm">
-      {variants.map((variant) => <Card key={variant} title={`${variant === 'merge' ? 'Merge' : 'Rebase'}${strategy === variant ? '（已選擇）' : ''}`}>
-        <Stack gap="sm">
-          <Text>{variant === 'merge'
+  const dark = env.theme.colorScheme === 'dark'
+  const alt = strategy === 'merge'
+    ? (squash ? '目標 A、B、C 與來源合成提交 S，由合併提交 M 接起。'
+      : '目標 A、B、C 與來源 1、2，由合併提交 M 接起；1、2 保持原樣。')
+    : (squash ? '來源先合成再重播為 S′，接在目標 A、B、C 後面。'
+      : '來源 1、2 重播成 1′、2′，接在目標 A、B、C 後面，提交編號改變。')
+  return <Box maxWidth={360} width="100%">
+    <Image src={`src/assets/finish-${strategy}${squash ? '-squash' : ''}${dark ? '-dark' : ''}.png`}
+      size="full" fit="contain" alt={alt} />
+  </Box>
+}
+
+/** ListItem 提供整張卡片的按鈕與鍵盤操作，卡片內只放靜態內容。 */
+function FinishStrategyCard({ strategy }: { strategy: FinishStrategy }) {
+  const selected = read(state.finishStrategy) === strategy
+  const squash = read(state.finishSquash)
+  const name = strategy === 'merge' ? 'Merge' : 'Rebase'
+  return <List label={`${name} 收尾方式`}>
+    <ListItem key={`finish-strategy:${strategy}`} current={selected} disabled={read(state.busy)}
+      onPress={() => edit(state.finishStrategy, strategy)}>
+      <Box border={selected ? 'accent' : true} background={selected ? 'muted' : 'none'} radius="lg" padding="md" width="100%">
+        <Stack gap="md">
+          <Row gap="sm" justify="between" wrap>
+            <Text size="md" weight="semibold">{`${selected ? '◉' : '○'} ${name}`}</Text>
+            {selected && <Badge tone="neutral">已選擇</Badge>}
+          </Row>
+          <Text>{strategy === 'merge'
             ? (squash ? '先把我的提交合成一個，再合回。' : '保留我的提交，把兩邊接起來。')
             : (squash ? '先合成一個提交，接到目標後再合回。' : '先把我的提交接到目標後面，再合回。')}</Text>
-          <Image src={`src/assets/finish-${variant}${squash ? '-squash' : ''}.png`} size="full" fit="contain" rounded
-            alt={variant === 'merge'
-              ? (squash ? 'A、B、C 為目標原有進度，來源先合成 S，再由 M 接起兩邊。' : 'A、B、C 為目標原有進度，來源的 1、2 保持原樣，由合併提交 M 接起兩邊。')
-              : (squash ? '來源先合成再重播為 S′，接在目標 A、B、C 後面。' : '來源的 1、2 重播為 1′、2′，接在目標 A、B、C 後面。')} />
-          <Text size="sm" muted>{variant === 'merge'
+          <FinishDiagram strategy={strategy} />
+          <Text size="sm" muted>{strategy === 'merge'
             ? (squash ? '來源提交會改寫；分歧時仍可能多一個合併提交 M。' : '不改寫既有提交；分歧時多一個合併提交 M。')
-            : '需要重播時，提交編號會改變；之後由工具快轉目標，完成合回。'}</Text>
+            : '重播會改變提交編號；之後由工具快轉目標，完成合回。'}</Text>
         </Stack>
-      </Card>)}
+      </Box>
+    </ListItem>
+  </List>
+}
+
+function FinishStrategies() {
+  return <Stack gap="sm">
+    <Text weight="semibold">用哪一種方式收尾？</Text>
+    <Grid minItemWidth="lg" gap="sm">
+      <FinishStrategyCard strategy="merge" />
+      <FinishStrategyCard strategy="rebase" />
     </Grid>
-    <Text muted size="sm">圖為兩邊都有新提交的教學示意，不是真實提交圖。目標沒有前進時，兩種方式都可能直接快轉。</Text>
-    {!squash && <Text muted size="sm">兩種方式預設都保留每個提交，Rebase 不等於 Squash。</Text>}
   </Stack>
+}
+
+function FinishDestination({ workspace, targets }: { workspace: Workspace; targets: Workspace[] }) {
+  return <Row gap="sm" align="center">
+    <Box grow width={0} minWidth={0}>
+      <Text muted size="sm">要收尾的 worktree</Text>
+      <Text weight="semibold">{branchName(workspace)}</Text>
+    </Box>
+    <Box width={24} shrink={false} align="center"><Text>→</Text></Box>
+    <Box grow width={0} minWidth={130}>
+      <Text muted size="sm">合回哪個本機分支？</Text>
+      {targets.length > 0 && <Select label="合併到" labelHidden value={read(state.finishTargetId)} disabled={read(state.busy)}
+        options={targets.map((entry) => ({ value: entry.id,
+          label: `${branchName(entry)}${!canFinish(entry) ? '（主要分支）' : ''}` }))}
+        onChange={(value) => edit(state.finishTargetId, value)} />}
+      {!targets.length && <Text size="sm" tone="warning">還沒有可以合併的分支</Text>}
+    </Box>
+  </Row>
 }
 
 function FinishNotices() {
@@ -228,23 +281,20 @@ function FinishWorkspace() {
   const squash = read(state.finishSquash)
   const method = strategy === 'merge' ? 'Merge' : 'Rebase'
   return <Stack gap="md">
-    <Stack gap="xs">
-      <Heading>完成工作</Heading>
-      <Text weight="semibold">{workspace.displayName || branchName(workspace)}</Text>
-      <Text size="sm">{branchName(workspace)}</Text>
-      <Text muted size="sm">{workspace.path}</Text>
-      {!snapshot?.files.length && <Text size="sm">{!snapshot ? (busy ? '正在確認變更…' : '還沒讀到變更。')
-        : '沒有未提交的變更。'}</Text>}
+    <Stack gap="sm">
+      <Heading level={1}>完成這個 worktree</Heading>
+      <Text muted>選擇怎麼把這個工作的成果合回去。</Text>
     </Stack>
-    {targets.length > 0 && <Select label="合併到" value={read(state.finishTargetId)} disabled={busy}
-      options={targets.map((entry) => ({ value: entry.id,
-        label: `${branchName(entry)}${!canFinish(entry) ? '（主要分支）' : ''}` }))}
-      onChange={(value) => edit(state.finishTargetId, value)} />}
+    <FinishDestination workspace={workspace} targets={targets} />
+    {!snapshot?.files.length && <Text muted size="sm">{!snapshot ? (busy ? '正在確認變更…' : '還沒讀到變更。')
+      : '沒有未提交的變更。'}</Text>}
+    <Separator />
     {!targets.length && <Callout tone="warning" title="還沒有可以合併的分支">
       請先在 Orca 開啟同專案的另一個工作資料夾，再回來按「重新整理」。
     </Callout>}
     <FinishStrategies />
     <FinishFiles />
+    <Separator />
     <Collapsible key={`finish-options:${workspace.id}`} title="其他選項" disabled={read(state.executing)}>
       <Stack gap="sm">
         <Checkbox label="合成 1 個提交（Squash）" checked={squash} disabled={busy}
@@ -262,7 +312,6 @@ function FinishWorkspace() {
     </Stack>}
     <FinishNotices />
     <Stack gap="xs" align="stretch">
-      <Text muted size="sm">請先關閉雙方的終端機與 AI 助手。</Text>
       {blocker && <Text size="sm">{blocker}</Text>}
       <Button variant="solid" disabled={busy || Boolean(blocker)} onPress={previewFinish}>{`預覽 ${method} 收尾`}</Button>
       <Text muted size="sm">先檢查，確認後才會合併。只更新本機，不 Push。</Text>
@@ -396,7 +445,7 @@ export default function Panel() {
     {read(state.notice) && <Text>{read(state.notice)}</Text>}
     {list.warnings.map((warning, index) => <Callout key={index} tone="warning">{warning}</Callout>)}
     <ExecutionResult />
-    {preview ? <PreviewCard /> : <Stack gap="md">
+    {preview ? <PreviewCard /> : focused && <Stack gap="md">
       {read(state.createOpen) && <CreateWorkspace />}
       <FinishWorkspace />
     </Stack>}

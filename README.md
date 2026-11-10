@@ -4,10 +4,10 @@ Orca ADE 的工作樹管理與本機收尾面板。參考 [Worktrunk](https://wo
 
 ## 主要操作
 
-1. **完成這個工作**：首頁標示 Orca 目前開啟的工作，點「完成這個工作」進入收尾頁。先核對工作名稱、分支與資料夾，再選目標分支及 **Merge／Rebase**。
+1. **完成這個工作**：首頁標示 Orca 目前開啟的工作，點「完成這個工作」進入收尾頁。先核對完整來源分支名稱，沿箭頭確認目標分支，再點選整張 **Merge／Rebase** 卡片。
    - **Merge（預設）**：保留原有提交，分歧時用一個合併提交把兩邊接起來。
    - **Rebase**：先把來源提交接到目標後面，需要重播時會改變提交編號，再由工具快轉目標完成合回。
-   - 兩張圖使用同一個分歧範例，並非真實提交圖。兩種方式預設都保留每個提交；Rebase 不等於 Squash。
+   - 兩張圖使用同一個分歧範例，隨 Orca 深淺色模式換圖，並非真實提交圖。寬側欄並排、窄側欄改為上下排列。兩種方式預設都保留每個提交；Rebase 不等於 Squash。
 
    點「預覽 Merge 收尾」或「預覽 Rebase 收尾」，核對摘要後才按「確認 Merge／Rebase 到目標分支」。返回修改保留選擇。只更新本機，不 Push。
 
@@ -100,6 +100,8 @@ fixture／mock 通過不代表真實 Orca、Agent 或 GitHub 流程已驗證。
 ```sh
 orca plugin dev watch .orca/package/gitflow-hub
 ```
+
+同一外掛只保留一個開發資料夾。切換 checkout 時，先用 `orca plugin dev unload <舊套件的完整路徑>` 移除舊登錄，再載入目前主專案的 `.orca/package/gitflow-hub`；這只移除外掛登錄，不刪除工作樹。不要同時登錄主專案與舊 worktree 的同名套件，否則可能繼續顯示舊畫面。
 
 首次載入可信 Worker 需要檢視並核准 Orca 顯示的存取權限。若回報 `approval_required`，依 CLI 回傳的 fingerprint 與命令操作。
 也可在 Settings → Plugins → Development folders 加入打包目錄並啟用。監看期間按 Ctrl-C 會卸載開發外掛。

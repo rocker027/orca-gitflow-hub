@@ -2,7 +2,7 @@ import { read } from 'orca'
 import { assert, mockHost, mount, test } from 'orca/testing'
 import type { Execution, HubAction } from './protocol'
 import * as panel from './panel'
-import { expandFinishOptions, requests, workspaces } from './panel.check.ts'
+import { chooseFinishStrategy, expandFinishOptions, requests, workspaces } from './panel.check.ts'
 import { cancelAdvice, previewAdvice, state, writeAdvice } from './panel-state'
 
 function calls(host: ReturnType<typeof mockHost>, name: string) {
@@ -27,7 +27,7 @@ test('P1 建議狀態流程先取得預覽才可送出，回覆不改變收尾�
   const { host, previews } = adviceHost()
   const view = await mount(panel, { host })
   await view.press({ text: '完成這個工作' })
-  await view.select({ label: '合併方式' }, 'rebase')
+  await chooseFinishStrategy(view, 'rebase')
   await writeAdvice()
   assert.equal(calls(host, 'hub.execute').length, 0)
   await previewAdvice()
@@ -38,7 +38,7 @@ test('P1 建議狀態流程先取得預覽才可送出，回覆不改變收尾�
   assert.deepEqual((calls(host, 'hub.execute')[0].params as { input: unknown }).input, { token: 'advice-1' })
   assert.equal(read(state.advicePreview), null)
   assert.match(read(state.advice)?.text ?? '', /兩邊都改過 src\/login\.ts/)
-  assert.equal(view.valueOf({ label: '合併方式' }), 'rebase')
+  assert.equal(view.find({ testId: 'finish-strategy:rebase' })?.props.current, true)
   await expandFinishOptions(view)
   assert.equal(view.valueOf({ label: '合成 1 個提交（Squash）' }), false)
   assert.equal(calls(host, 'hub.preview').length, 1)

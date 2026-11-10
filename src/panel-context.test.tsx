@@ -3,7 +3,7 @@ import { assert, mockHost, mount, test, type TestPanel } from 'orca/testing'
 import type { GitSnapshot, Workspace } from './contracts'
 import type { Dashboard, Execution, HubAction, HubList, Preview } from './protocol'
 import * as panel from './panel'
-import { expandFinishOptions, requests, snapshot, workspaces } from './panel.check.ts'
+import { chooseFinishStrategy, expandFinishOptions, requests, snapshot, workspaces } from './panel.check.ts'
 import { previewAdvice, state, writeAdvice } from './panel-state'
 
 function deferred<T>() {
@@ -134,7 +134,7 @@ test('切換後建立草稿與收尾選項不會帶到新的工作樹', async ()
   f.activate(workspaces[0].id)
   await f.emit(view)
   await view.press({ testId: `finish:${workspaces[0].id}` })
-  await view.select({ label: '合併方式' }, 'rebase')
+  await chooseFinishStrategy(view, 'rebase')
   await expandFinishOptions(view)
   await view.toggle({ label: '合成 1 個提交（Squash）' })
   await view.toggle({ label: '完成後移除資料夾' })
@@ -143,7 +143,7 @@ test('切換後建立草稿與收尾選項不會帶到新的工作樹', async ()
   f.activate(workspaces[0].id)
   await f.emit(view)
   await view.press({ testId: `finish:${workspaces[0].id}` })
-  assert.equal(view.valueOf({ label: '合併方式' }), 'merge')
+  assert.equal(view.find({ testId: 'finish-strategy:merge' })?.props.current, true)
   await expandFinishOptions(view)
   assert.equal(view.valueOf({ label: '合成 1 個提交（Squash）' }), false)
   assert.equal(view.valueOf({ label: '完成後移除資料夾' }), false)
@@ -297,7 +297,7 @@ for (const delayed of ['inspect', 'preview'] as const) {
     // 切換後收尾頁已關閉，直接核對 state，確保舊 token／快照沒有寫回。
     assert.equal(read(state.preview), null)
     assert.notEqual(read(state.snapshot)?.branch, 'OLD_BRANCH')
-    assert.equal(view.find({ type: 'Heading', text: '完成工作' }), null)
+    assert.equal(view.find({ type: 'Heading', text: '完成這個 worktree' }), null)
     assert.equal(f.calls('hub.execute').length, 0)
     await view.unmount()
   })

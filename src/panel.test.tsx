@@ -1,7 +1,7 @@
 import { assert, mockHost, mount, test } from 'orca/testing'
 import type { Execution, HubAction } from './protocol'
 import * as panel from './panel'
-import { expandFinishOptions, dashboardFor, requests, snapshot, workspaces } from './panel.check.ts'
+import { chooseFinishStrategy, expandFinishOptions, dashboardFor, requests, snapshot, workspaces } from './panel.check.ts'
 
 function calls(host: ReturnType<typeof mockHost>, name: string) {
   return host.calls.filter((call) => call.method === 'plugin.request' &&
@@ -93,7 +93,7 @@ test('長清單選收尾後聚焦內容，確認預覽位於檔案清單之前',
   assert.equal(view.find({ label: '搜尋工作' }), null)
   assert.equal(view.find({ text: '開始新工作' }), null)
   assert.equal(view.find({ testId: `open:${workspaces[1].id}` }), null)
-  assert.ok(view.find({ type: 'Heading', text: '完成工作' }))
+  assert.ok(view.find({ type: 'Heading', text: '完成這個 worktree' }))
   assert.ok(view.find({ text: 'feature/login' }))
   await view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
   assert.equal(view.findAll({ type: 'Card' })[0]?.label, '最後確認')
@@ -110,7 +110,7 @@ test('長清單選收尾後聚焦內容，確認預覽位於檔案清單之前',
   await openFinish(view)
   assert.equal(view.find({ label: '搜尋工作' }), null)
   assert.equal(view.find({ text: '開始新工作' }), null)
-  assert.ok(view.find({ type: 'Heading', text: '完成工作' }))
+  assert.ok(view.find({ type: 'Heading', text: '完成這個 worktree' }))
   await view.press({ text: '返回工作清單' })
   assert.ok(view.find({ testId: `open:${workspaces[1].id}` }))
   await view.unmount()
@@ -123,7 +123,7 @@ test('收尾只接受同專案目標，一次預覽全部變更與四個步驟',
   assert.deepEqual(view.find({ label: '合併到' })?.props.options, [{ value: workspaces[1].id, label: 'main（主要分支）' }])
   await expandFinishOptions(view)
   assert.equal(view.valueOf({ label: '完成後移除資料夾' }), false)
-  assert.equal(view.valueOf({ label: '合併方式' }), 'merge')
+  assert.equal(view.find({ testId: 'finish-strategy:merge' })?.props.current, true)
   await expandFinishOptions(view)
   assert.equal(view.valueOf({ label: '合成 1 個提交（Squash）' }), false)
   assert.ok(view.find({ label: '收尾時提交 2 個檔案' }))
@@ -540,14 +540,15 @@ test('合併確認頁可返回修改並保留合併方式、目標與移除資�
   const view = await mount(panel, { host })
   await view.press({ testId: `finish:${workspaces[0].id}` })
   await view.select({ label: '合併到' }, target.id)
-  await view.select({ label: '合併方式' }, 'rebase')
+  await chooseFinishStrategy(view, 'rebase')
   await expandFinishOptions(view)
   await view.toggle({ label: '合成 1 個提交（Squash）' })
   await expandFinishOptions(view)
   await view.toggle({ label: '完成後移除資料夾' })
   await view.press({ text: /^預覽 (Merge|Rebase) 收尾$/ })
   assert.equal(view.find({ label: '合併到' }), null)
-  assert.equal(view.find({ label: '合併方式' }), null)
+  assert.equal(view.find({ testId: 'finish-strategy:merge' }), null)
+  assert.equal(view.find({ testId: 'finish-strategy:rebase' }), null)
   assert.equal(view.find({ label: '4. 這次完成了什麼' }), null)
   assert.equal(view.find({ label: '完成後移除資料夾' }), null)
   assert.ok(view.find({ text: 'feature/login → release' }))
@@ -559,7 +560,7 @@ test('合併確認頁可返回修改並保留合併方式、目標與移除資�
   await view.press({ text: '返回修改' })
   assert.equal(view.find({ text: /^確認 (Merge|Rebase) 到 / }), null)
   assert.equal(view.valueOf({ label: '合併到' }), target.id)
-  assert.equal(view.valueOf({ label: '合併方式' }), 'rebase')
+  assert.equal(view.find({ testId: 'finish-strategy:rebase' })?.props.current, true)
   await expandFinishOptions(view)
   assert.equal(view.valueOf({ label: '合成 1 個提交（Squash）' }), true)
   await expandFinishOptions(view)

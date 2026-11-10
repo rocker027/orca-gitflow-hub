@@ -1,6 +1,10 @@
 import { defineCheck, type TestPanel } from 'orca/testing'
 import type { GitSnapshot, PrDetails, Workspace } from './contracts'
-import type { Dashboard } from './protocol'
+import type { Dashboard, FinishStrategy } from './protocol'
+
+export async function chooseFinishStrategy(view: TestPanel, strategy: FinishStrategy) {
+  await view.press({ testId: `finish-strategy:${strategy}` })
+}
 
 export async function expandFinishOptions(view: TestPanel) {
   if (!view.find({ label: '合成 1 個提交（Squash）' })) await view.toggle({ label: '其他選項' })
@@ -56,9 +60,13 @@ export const requests = {
 
 export default defineCheck({
   worktrees: { requests },
+  mainWithWork: { requests: { ...requests,
+    'hub.dashboard': { ...dashboardFor(), activeWorkspaceId: workspaces[1].id,
+      workspaces: workspaces.map((workspace) => ({ ...workspace, isActive: workspace.id === workspaces[1].id })) }
+  } },
   mainOnly: { requests: { ...requests,
     'hub.list': { workspaces: [workspaces[1]], warnings: [] },
-    'hub.dashboard': { ...dashboardFor(), workspaces: [workspaces[1]] }
+    'hub.dashboard': { ...dashboardFor(), workspaces: [{ ...workspaces[1], isActive: true }], activeWorkspaceId: workspaces[1].id }
   } },
   unknownChanges: { requests: { ...requests,
     'hub.dashboard': { ...dashboardFor(), summaries: dashboardFor().summaries.map((summary) => ({

@@ -1,7 +1,7 @@
 import { assert, mockHost, mount, test } from 'orca/testing'
 import type { HubAction } from './protocol'
 import * as panel from './panel'
-import { expandFinishOptions, requests, snapshot, workspaces } from './panel.check.ts'
+import { chooseFinishStrategy, expandFinishOptions, requests, snapshot, workspaces } from './panel.check.ts'
 
 for (const clean of [false, true]) {
   for (const strategy of ['merge', 'rebase'] as const) {
@@ -17,7 +17,7 @@ for (const clean of [false, true]) {
         } })
         const view = await mount(panel, { host })
         await view.press({ testId: `finish:${workspaces[0].id}` })
-        await view.select({ label: '合併方式' }, strategy)
+        await chooseFinishStrategy(view, strategy)
         await expandFinishOptions(view)
         if (squash) await view.toggle({ label: '合成 1 個提交（Squash）' })
         assert.equal(view.find({ label: '4. 這次完成了什麼' }), null)
